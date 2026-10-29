@@ -3,23 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn xdg(var: &str, fallback: &str) -> PathBuf {
-    match std::env::var_os(var) {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => home().join(fallback),
-    }
-}
-
+/// `$XDG_CONFIG_HOME/phthora` on Linux, the platform's config folder elsewhere.
 pub fn config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("phthora")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("phthora")
 }
 
+/// `$XDG_DATA_HOME/phthora` on Linux, the platform's data folder elsewhere.
 pub fn data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("phthora")
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("phthora")
 }
 
 pub fn log_dir() -> PathBuf {
@@ -102,14 +93,13 @@ impl Settings {
         }
     }
 
-    /// Where exports go by default: the setting, else ~/Videos, else home.
+    /// Where exports go by default: the setting, else the videos folder, else home.
     pub fn export_dir(&self) -> PathBuf {
         if let Some(d) = &self.output_dir
             && d.is_dir() {
                 return d.clone();
             }
-        let v = home().join("Videos");
-        if v.is_dir() { v } else { home() }
+        dirs::video_dir().filter(|v| v.is_dir()).or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."))
     }
 }
 

@@ -65,6 +65,12 @@ fn fetch_to(url: &str, tmp: &Path, sha256: &str, size: u64, progress: &mut dyn F
     // https only; file:// is for tests
     let proto = if url.starts_with("file://") { "=file" } else { "=https" };
     let mut cmd = Command::new("curl");
+    #[cfg(windows)]
+    {
+        // no console window of its own
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
     cmd.args(["--fail", "--location", "--silent", "--show-error", "--proto", proto, "--proto-redir", proto])
         .args(["--connect-timeout", "20", "--max-time", "900"])
         .arg("--output")

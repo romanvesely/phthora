@@ -13,7 +13,7 @@ pub fn ffmpeg_available() -> bool {
     static OK: OnceLock<bool> = OnceLock::new();
     *OK.get_or_init(|| {
         ["ffmpeg", "ffprobe"].iter().all(|bin| {
-            Command::new(bin)
+            tool(bin)
                 .arg("-version")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -33,9 +33,22 @@ pub(crate) fn require_ffmpeg() -> crate::Result<()> {
     }
 }
 
+/// A command for an external tool; on Windows it gets no console window of its own.
+pub(crate) fn tool(bin: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
 /// Base ffmpeg command: quiet, errors only.
 pub(crate) fn ffmpeg_cmd() -> Command {
-    let mut c = Command::new("ffmpeg");
+    let mut c = tool("ffmpeg");
     c.args(["-hide_banner", "-loglevel", "error"]);
     c
 }

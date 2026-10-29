@@ -5,11 +5,11 @@ use std::path::Path;
 use std::process::Stdio;
 
 use crate::error::{MediaError, Result};
-use crate::util::{ffmpeg_cmd, require_ffmpeg};
+use crate::util::{ffmpeg_cmd, require_ffmpeg, tool};
 
 /// Channels of the first audio stream.
 fn channels(path: &Path) -> Option<u32> {
-    let out = std::process::Command::new("ffprobe")
+    let out = tool("ffprobe")
         .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels", "-of", "csv=p=0"])
         .arg(path)
         .stdin(Stdio::null())

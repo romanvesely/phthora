@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Deserialize;
 
 use crate::error::{MediaError, Result};
-use crate::util::require_ffmpeg;
+use crate::util::{require_ffmpeg, tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaKind {
@@ -79,7 +79,7 @@ pub(crate) struct RawSideData {
 
 pub(crate) fn run_ffprobe(path: &Path) -> Result<RawProbe> {
     require_ffmpeg()?;
-    let out = Command::new("ffprobe")
+    let out = tool("ffprobe")
         .args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams"])
         .arg(path)
         .stdin(Stdio::null())
@@ -97,7 +97,7 @@ pub(crate) fn run_ffprobe(path: &Path) -> Result<RawProbe> {
 }
 
 fn first_frame_probe(path: &Path) -> Result<RawProbe> {
-    let out = Command::new("ffprobe")
+    let out = tool("ffprobe")
         .args(["-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_frames", "-show_entries", "frame=side_data_list", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())
@@ -244,7 +244,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 /// Exact number of decodable video frames (full decode, can be slow).
 pub fn count_frames(path: &Path) -> Result<u64> {
     require_ffmpeg()?;
-    let out = Command::new("ffprobe")
+    let out = tool("ffprobe")
         .args([
             "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
             "stream=nb_read_frames", "-of", "json",

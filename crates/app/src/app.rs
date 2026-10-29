@@ -2337,8 +2337,8 @@ impl eframe::App for PhthoraApp {
 /// Show a folder or file in the desktop's file manager.
 fn open_path(p: &Path) {
     let _ = std::fs::create_dir_all(p);
-    if let Err(e) = std::process::Command::new("xdg-open").arg(p).spawn() {
-        tracing::warn!("xdg-open {}: {e}", p.display());
+    if let Err(e) = open::that_detached(p) {
+        tracing::warn!("open {}: {e}", p.display());
     }
 }
 

@@ -43,16 +43,12 @@ pub fn set_models_dir(dir: Option<PathBuf>) {
     *DIR_OVERRIDE.lock().unwrap() = dir;
 }
 
-/// `$XDG_DATA_HOME/phthora/models` (same data folder the app uses for presets).
+/// `$XDG_DATA_HOME/phthora/models` on Linux (same data folder the app uses for presets).
 pub fn models_dir() -> PathBuf {
     if let Some(d) = DIR_OVERRIDE.lock().unwrap().clone() {
         return d;
     }
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join(".local/share"),
-    };
-    base.join("phthora").join("models")
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("phthora").join("models")
 }
 
 /// Where the model is (or will be) stored.
