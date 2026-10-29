@@ -213,23 +213,20 @@ impl BatchUi {
                         ui.add_enabled(self.use_duration, egui::DragValue::new(&mut self.duration).range(0.05..=3600.0).speed(0.05).suffix(" s"));
                         ui.end_row();
                         ui.checkbox(&mut self.use_fps, "Frame rate");
-                        ui.add_enabled(self.use_fps, egui::DragValue::new(&mut self.fps).range(1.0..=120.0).speed(0.1).suffix(" fps"));
+                        ui.add_enabled(self.use_fps, egui::DragValue::new(&mut self.fps).range(1.0..=120.0).speed(0.1).max_decimals(2).suffix(" fps"));
                         ui.end_row();
-                        ui.checkbox(&mut self.use_format, "Format");
-                        ui.add_enabled_ui(self.use_format, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                for f in FORMATS {
-                                    let missing = phthora_media::missing_encoder(f);
-                                    let r = ui.add_enabled_ui(missing.is_none(), |ui| ui.selectable_label(self.format == f, f.label())).inner;
-                                    if let Some(enc) = missing {
-                                        r.on_disabled_hover_text(format!("This ffmpeg has no {enc} encoder"));
-                                    } else if r.clicked() {
-                                        self.format = f;
-                                    }
-                                }
-                            });
-                        });
-                        ui.end_row();
+                    });
+                    ui.checkbox(&mut self.use_format, "Format");
+                    ui.horizontal_wrapped(|ui| {
+                        for f in FORMATS {
+                            let missing = phthora_media::missing_encoder(f);
+                            let r = ui.add_enabled(self.use_format && missing.is_none(), egui::Button::new(f.label()).selected(self.format == f).wrap_mode(egui::TextWrapMode::Extend));
+                            if let Some(enc) = missing {
+                                r.on_disabled_hover_text(format!("This ffmpeg has no {enc} encoder"));
+                            } else if r.clicked() {
+                                self.format = f;
+                            }
+                        }
                     });
                     ui.label(egui::RichText::new("What is not ticked follows each file.").small().weak());
                 }
@@ -287,5 +284,44 @@ impl BatchUi {
             self.open = false;
         }
         cmd
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_new_media_files_are_added() {
+        let d = std::env::temp_dir().join(format!("phthora-batchui-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub.mp4")).unwrap();
+        for n in ["a.mp4", "b.PNG", "notes.txt"] {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        let mut ui = BatchUi::new();
+        let all = ["a.mp4", "b.PNG", "notes.txt", "missing.mp4", "sub.mp4"].map(|n| d.join(n));
+        // media by extension (any case), existing files only; text files, missing files and folders stay out
+        assert_eq!(ui.add(all.clone()), 2);
+        assert_eq!(ui.files, vec![d.join("a.mp4"), d.join("b.PNG")]);
+        // the same files again change nothing
+        assert_eq!(ui.add(all), 0);
+        assert_eq!(ui.files.len(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn match_input_means_no_overrides() {
+        let mut ui = BatchUi::new();
+        assert_eq!(ui.overrides(), Overrides::default());
+        ui.match_input = false;
+        ui.size = (320, 180);
+        ui.duration = 2.0;
+        ui.fps = 10.0;
+        ui.format = Format::Gif;
+        assert_eq!(ui.overrides(), Overrides { size: Some((320, 180)), duration: Some(2.0), fps: Some(10.0), format: Some(Format::Gif) });
+        ui.use_size = false;
+        ui.use_format = false;
+        assert_eq!(ui.overrides(), Overrides { size: None, duration: Some(2.0), fps: Some(10.0), format: None });
     }
 }
