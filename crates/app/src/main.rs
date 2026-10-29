@@ -184,6 +184,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         for w in warnings {
             eprintln!("preset: {w}");
         }
+        for m in phthora_core::preset::missing_files(&fx) {
+            eprintln!("preset: file not found: {m}");
+        }
         chain = fx;
     }
     for id in &effects_arg {

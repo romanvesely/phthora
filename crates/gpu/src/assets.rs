@@ -119,6 +119,11 @@ impl VideoTexture {
         self.src.as_ref().map(|s| s.duration()).unwrap_or(0.0)
     }
 
+    /// false if the clip could not be opened (the fallback color shows instead)
+    pub fn is_open(&self) -> bool {
+        self.src.is_some()
+    }
+
     pub fn size(&self) -> (u32, u32) {
         self.src.as_ref().map(|s| s.size()).unwrap_or((1, 1))
     }

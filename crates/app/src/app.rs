@@ -527,8 +527,17 @@ impl PhthoraApp {
                 } else {
                     self.notify(format!("Preset {} loaded with warnings: {}", self.preset_name, warnings.join("; ")));
                 }
+                self.warn_missing_files();
             }
             Err(e) => self.error("Cannot load the preset", format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// A loaded preset may point at media files that moved or were deleted.
+    fn warn_missing_files(&mut self) {
+        let missing = phthora_core::preset::missing_files(&self.chain);
+        if !missing.is_empty() {
+            self.error("Missing files", format!("The preset uses files that do not exist:\n{}", missing.join("\n")));
         }
     }
 
@@ -1388,7 +1397,7 @@ impl PhthoraApp {
                     });
                     if e.expanded {
                         let learning = self.learning.as_ref().map(|l| (l.uid, l.key.as_str()));
-                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink, audio_env: audio_env.as_deref().map(|v| v.as_slice()) };
+                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink, audio_env: audio_env.as_deref().map(|v| v.as_slice()), problem: self.engine.problem(uid) };
                         params_ui::effect_params(ui, e, &mut cx);
                     }
                 })
@@ -2129,9 +2138,9 @@ impl PhthoraApp {
                     let image_only = e.desc.id == "mask";
                     let mut d = rfd::FileDialog::new();
                     d = if image_only {
-                        d.add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"])
+                        d.add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp", "avif"])
                     } else {
-                        d.add_filter("Media", &["png", "jpg", "jpeg", "webp", "mp4", "mov", "webm", "gif", "mkv"])
+                        d.add_filter("Media", &["png", "jpg", "jpeg", "webp", "bmp", "avif", "mp4", "mov", "webm", "gif", "mkv", "avi", "m4v", "ogv", "ogg"])
                     };
                     if let Some(p) = d.pick_file() {
                         let s = p.to_string_lossy().to_string();
@@ -2202,6 +2211,7 @@ impl eframe::App for PhthoraApp {
                 if let Ok(s) = std::fs::read_to_string(&p)
                     && let Ok((fx, _)) = phthora_core::preset::from_json(&s) {
                         self.chain.replace(fx, true);
+                        self.warn_missing_files();
                     }
             } else {
                 self.load_input(&p);

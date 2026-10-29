@@ -133,6 +133,11 @@ impl Engine {
     }
 
     /// Clear all effect history (feedback trails etc.).
+    /// Why an effect cannot do its job (see `GpuEffect::problem`).
+    pub fn problem(&self, uid: u64) -> Option<String> {
+        self.slots.get(&uid)?.effect.problem()
+    }
+
     pub fn reset_history(&mut self) {
         for s in self.slots.values_mut() {
             s.effect.reset(&self.ctx);

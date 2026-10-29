@@ -31,6 +31,8 @@ pub struct ParamCtx<'a> {
     pub blink: bool,
     /// level of the audio track over the output (keyframe editor background)
     pub audio_env: Option<&'a [f32]>,
+    /// why the effect cannot do its job (a file that cannot be read)
+    pub problem: Option<String>,
 }
 
 const LABEL_W: f32 = 92.0;
@@ -63,6 +65,9 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
     let uid = e.uid;
     if e.desc.id == "remove_background" {
         model_status(ui, cx);
+    }
+    if let Some(p) = &cx.problem {
+        ui.colored_label(Color32::from_rgb(240, 110, 100), format!("⚠ {p}"));
     }
     for p in e.desc.params.clone() {
         if p.hidden {

@@ -151,6 +151,18 @@ pub fn from_preset(p: &PresetFile) -> (Chain, Vec<String>) {
     (chain, warn)
 }
 
+/// Files the chain's effects read (Media, Mask) that do not exist, as "effect: path".
+pub fn missing_files(chain: &Chain) -> Vec<String> {
+    chain
+        .effects
+        .iter()
+        .filter_map(|e| match e.values.get("path") {
+            Some(Value::Text(p)) if !p.is_empty() && !std::path::Path::new(p).exists() => Some(format!("{}: {p}", e.name())),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn to_json(chain: &Chain) -> String {
     serde_json::to_string_pretty(&to_preset(chain)).expect("serializable")
 }
@@ -253,6 +265,19 @@ mod tests {
         assert_ne!(dg.uid, g, "fresh ids on load");
         let members: Vec<_> = d.effects.iter().map(|e| e.group == Some(dg.uid)).collect();
         assert_eq!(members, vec![true, true, false]);
+    }
+
+    #[test]
+    fn missing_media_files_are_listed() {
+        let mut chain = Chain::default();
+        let mut media = EffectInstance::by_id("media").unwrap();
+        media.set("path", Value::Text("/nonexistent/clip.mp4".into()));
+        chain.effects.push(media);
+        let mut here = EffectInstance::by_id("media").unwrap();
+        here.set("path", Value::Text(env!("CARGO_MANIFEST_DIR").into()));
+        chain.effects.push(here);
+        chain.effects.push(EffectInstance::by_id("media").unwrap());
+        assert_eq!(missing_files(&chain), vec!["Media: /nonexistent/clip.mp4".to_string()]);
     }
 
     #[test]

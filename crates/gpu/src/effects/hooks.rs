@@ -173,6 +173,19 @@ impl ShaderHook for ImageTex {
         }
         self.img.as_ref().or(self.black.as_ref()).map(|t| tex(t, SamplerKind::LinearClamp))
     }
+    fn problem(&self) -> Option<String> {
+        file_problem(&self.path, self.img.is_some())
+    }
+}
+
+/// A file an effect reads that did not load: missing or unreadable.
+fn file_problem(path: &str, loaded: bool) -> Option<String> {
+    if path.is_empty() || loaded {
+        return None;
+    }
+    let p = std::path::Path::new(path);
+    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+    Some(if p.exists() { format!("Cannot read {name}") } else { format!("File not found: {name}") })
 }
 
 // ---------------------------------------------------------------- Media overlay
@@ -216,6 +229,9 @@ impl ShaderHook for Overlay {
         if self.black.is_none() {
             self.black = Some(rc.assets.solid(rc.ctx, [0, 0, 0, 255]));
         }
+    }
+    fn problem(&self) -> Option<String> {
+        file_problem(&self.path, self.image.is_some() || self.video.as_ref().is_some_and(|v| v.is_open()))
     }
     fn uniform(&self, key: &str) -> Option<UVal> {
         (key == "sourceAspect").then_some(UVal::F(self.aspect))

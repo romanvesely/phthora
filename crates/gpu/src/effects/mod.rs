@@ -46,6 +46,10 @@ pub trait GpuEffect {
     fn resize(&mut self, _ctx: &GpuContext, _w: u32, _h: u32) {}
     /// clear history buffers
     fn reset(&mut self, _ctx: &GpuContext) {}
+    /// why the effect cannot do its job (a file that cannot be read), shown in the editor
+    fn problem(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Uniform values every effect shader can use, derived from the effect params.
@@ -133,6 +137,10 @@ pub trait ShaderHook {
     fn texture(&self, _name: &str) -> Option<TexInput<'_>> {
         None
     }
+    /// see `GpuEffect::problem`
+    fn problem(&self) -> Option<String> {
+        None
+    }
     fn sampler_for(&self, _name: &str) -> Option<SamplerKind> {
         None
     }
@@ -165,6 +173,9 @@ impl ShaderEffect {
 }
 
 impl GpuEffect for ShaderEffect {
+    fn problem(&self) -> Option<String> {
+        self.hook.as_ref().and_then(|h| h.problem())
+    }
     fn render(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect, input: &Target, orig: &Target, out: &Target) {
         if let Some(h) = self.hook.as_mut() {
             h.prepare_input(rc, e, input);
