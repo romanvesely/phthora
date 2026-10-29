@@ -66,9 +66,26 @@ const LEARN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 struct ExportUi {
     open: bool,
+    /// format in use, refreshed from `video` / `still` (or the input) by `export_params`
     format: Format,
+    /// remembered choices: the format for moving pictures and for stills
+    video: Format,
+    still: Format,
     quality: Quality,
+    /// size, length, frame rate and format follow the input
+    match_input: bool,
+    /// a new input keeps size, length and frame rate
+    lock: bool,
+    /// seconds into the audio track where the exported sound starts
+    audio_start: f64,
     running: Option<RunningExport>,
+}
+
+/// What an export would use right now.
+struct ExportParams {
+    size: (u32, u32),
+    timing: TimingSettings,
+    format: Format,
 }
 
 pub struct PhthoraApp {
@@ -176,7 +193,12 @@ impl PhthoraApp {
             preset_idx: None,
             preset_name: String::new(),
             preset_scan: Instant::now(),
-            export: ExportUi { open: false, format: Format::Mp4, quality, running: None },
+            export: {
+                let remembered = |id: &str, still: bool, fallback: Format| Format::from_id(id).filter(|f| f.is_still() == still).unwrap_or(fallback);
+                let video = remembered(&settings.export_video_format, false, Format::Mp4);
+                let still = remembered(&settings.export_still_format, true, Format::Png);
+                ExportUi { open: false, format: video, video, still, quality, match_input: settings.export_match_input, lock: false, audio_start: 0.0, running: None }
+            },
             audio: AudioState::new(settings.audio.clone()),
             settings,
             show_settings: false,
@@ -352,15 +374,18 @@ impl PhthoraApp {
                 return;
             }
         };
-        let (w, h) = phthora_media::fit_size(info.width, info.height, MAX_DIM);
-        self.set_size(w, h);
+        // locked export settings keep the size, length and frame rate of the last input
+        let locked = self.export.lock;
+        let (w, h) = if locked { self.out_size } else { phthora_media::fit_size(info.width, info.height, MAX_DIM) };
+        if !locked {
+            self.set_size(w, h);
+        }
         if info.kind == MediaKind::Image {
             match phthora_media::load_image(path, MAX_DIM) {
                 Ok(img) => {
                     self.engine.set_source_rgba(img.width, img.height, &img.data);
                     self.source = Source::Still;
                     self.timing.mode = OutputMode::Image;
-                    self.export.format = Format::Png;
                 }
                 Err(e) => {
                     self.notify(format!("Cannot load image: {e}"));
@@ -371,14 +396,17 @@ impl PhthoraApp {
             self.playback = Playback { speed: self.playback.speed, direction: self.playback.direction, ..Default::default() };
             let v = InputVideo::open(path, &info, (w, h), self.playback);
             self.timing.mode = OutputMode::Video;
-            self.timing.duration = v.playback.natural_duration(v.clip()).clamp(0.05, 3600.0);
-            if info.fps > 0.0 {
-                self.timing.fps = info.fps.round().clamp(1.0, 120.0);
-            }
-            if self.export.format == Format::Png {
-                self.export.format = Format::Mp4;
+            if !locked {
+                self.timing.duration = v.playback.natural_duration(v.clip()).clamp(0.05, 3600.0);
+                if info.fps > 0.0 {
+                    self.timing.fps = info.fps.round().clamp(1.0, 120.0);
+                }
             }
             self.source = Source::Video(v);
+        }
+        if !locked {
+            // the audio offset belongs to the track it was set for
+            self.export.audio_start = 0.0;
         }
         self.settings.input_dir = path.parent().map(|p| p.to_path_buf());
         self.settings.save();
@@ -522,35 +550,91 @@ impl PhthoraApp {
         self.input_info.as_ref().is_some_and(|i| i.has_audio) && self.playback.speed == 1.0 && self.playback.direction == phthora_core::Direction::Forward
     }
 
+    /// Size, timing and format of an export: the editor's, or the input's with "Match input".
+    fn export_params(&self) -> ExportParams {
+        let image_mode = self.timing.mode == OutputMode::Image;
+        let mut format = if image_mode { self.export.still } else { self.export.video };
+        let mut size = self.out_size;
+        let mut timing = self.timing;
+        if self.export.match_input
+            && let (Some(info), Some(path)) = (&self.input_info, &self.input_path) {
+                let (w, h) = phthora_media::fit_size(info.width, info.height, MAX_DIM);
+                size = (w.clamp(16, MAX_DIM) & !1, h.clamp(16, MAX_DIM) & !1);
+                if let Source::Video(v) = &self.source {
+                    timing.duration = self.playback.natural_duration(v.clip()).clamp(0.05, 3600.0);
+                    if info.fps > 0.0 {
+                        timing.fps = info.fps.round().clamp(1.0, 120.0);
+                    }
+                }
+                format = render::matched_format(info.kind, path, image_mode);
+            }
+        // a format this ffmpeg cannot write falls back to the basic one
+        if !phthora_media::format_available(format) {
+            format = if image_mode { Format::Png } else { Format::Mp4 };
+        }
+        ExportParams { size, timing, format }
+    }
+
+    /// Remember the chosen formats, quality and "Match input" for the next start.
+    fn store_export_choices(&mut self) {
+        self.settings.quality = quality_name(self.export.quality).into();
+        self.settings.export_video_format = self.export.video.id().into();
+        self.settings.export_still_format = self.export.still.id().into();
+        self.settings.export_match_input = self.export.match_input;
+        self.settings.save();
+    }
+
+    /// Start of the exported audio: the track's own start plus the export offset, kept
+    /// inside a trimmed part.
+    fn offset_audio_start(&self, start: f64, end: Option<f64>) -> f64 {
+        let s = start + self.export.audio_start;
+        end.map_or(s, |e| s.min((e - 0.05).max(0.0)))
+    }
+
     fn start_export(&mut self) {
         if self.export.running.is_some() {
             return;
         }
-        let fmt = self.export.format;
+        let params = self.export_params();
+        let fmt = params.format;
+        self.export.format = fmt;
         let stem = self.input_path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "phthora".into());
         let name = phthora_media::default_export_name(&stem, fmt.extension());
-        let Some(out) = rfd::FileDialog::new().set_directory(self.settings.export_dir()).set_file_name(&name).save_file() else { return };
+        let Some(mut out) = rfd::FileDialog::new().set_directory(self.settings.export_dir()).set_file_name(&name).save_file() else { return };
+        if fmt == Format::PngSeq && out.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+            // a PNG sequence is a folder: do not name it like a file
+            out.set_extension("");
+        }
         self.settings.output_dir = out.parent().map(|p| p.to_path_buf());
-        self.settings.quality = quality_name(self.export.quality).into();
-        self.settings.save();
-        let audio = self.audio.export_source();
+        self.store_export_choices();
+        let audio = self.audio.export_source().map(|mut a| {
+            a.start = self.offset_audio_start(a.start, a.end);
+            a
+        });
         self.settings.audio = self.audio.settings.clone();
-        let mut timing = self.timing;
+        let mut timing = params.timing;
         timing.bpm = self.use_bpm.then_some(self.bpm);
+        // the analysed track moves with the exported sound, so modulators keep reacting to what is heard
+        let audio_track = self.audio.track.clone().filter(|_| self.audio.src != Src::Mic).map(|mut t| {
+            if audio.is_some() {
+                t.start = self.offset_audio_start(t.start, t.end);
+            }
+            t
+        });
         let job = ExportJob {
             input: self.input_path.clone(),
             playback: self.playback,
             effects: self.chain.effects.clone(),
             timing,
-            width: self.out_size.0,
-            height: self.out_size.1,
+            width: params.size.0,
+            height: params.size.1,
             background: self.engine.background,
             flip_x: self.engine.flip_x,
             format: fmt,
             quality: self.export.quality,
             backend: if self.settings.hw_encode && self.vaapi.load(Ordering::Relaxed) { Backend::Vaapi } else { Backend::Software },
             audio,
-            audio_track: self.audio.track.clone().filter(|_| self.audio.src != Src::Mic),
+            audio_track,
             audio_settings: self.audio.settings.clone(),
             midi: self.midi_values.clone(),
             out,
@@ -1387,9 +1471,11 @@ impl PhthoraApp {
         if !self.export.open {
             return;
         }
+        self.export.format = self.export_params().format;
         let mut open = true;
         let mut start = false;
         let mut cancel = false;
+        let mut changed = false;
         let live = matches!(self.source, Source::Live(_));
         egui::Window::new("Export").open(&mut open).resizable(false).show(ctx, |ui| {
             if live {
@@ -1397,37 +1483,78 @@ impl PhthoraApp {
                 return;
             }
             let running = self.export.running.is_some();
+            let image_mode = self.timing.mode == OutputMode::Image;
+            let has_input = self.input_info.is_some();
+            let matching = self.export.match_input && has_input;
             ui.add_enabled_ui(!running, |ui| {
                 egui::Grid::new("export").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                     ui.label("Format");
+                    ui.add_enabled_ui(!matching, |ui| {
+                        ui.horizontal(|ui| {
+                            let shown = self.export_params().format;
+                            for f in if image_mode { &Format::STILLS[..] } else { &Format::ANIMATED[..] } {
+                                let missing = phthora_media::missing_encoder(*f);
+                                let r = ui.add_enabled_ui(missing.is_none(), |ui| ui.selectable_label(shown == *f, f.label())).inner;
+                                let r = match missing {
+                                    Some(enc) => r.on_disabled_hover_text(format!("This ffmpeg has no {enc} encoder")),
+                                    None => r.on_hover_text(format_hint(*f)),
+                                };
+                                if r.clicked() {
+                                    if f.is_still() { self.export.still = *f } else { self.export.video = *f }
+                                    changed = true;
+                                }
+                            }
+                        });
+                    });
+                    ui.end_row();
+                    ui.label("Settings");
                     ui.horizontal(|ui| {
-                        if self.timing.mode == OutputMode::Image {
-                            ui.selectable_value(&mut self.export.format, Format::Png, "PNG");
-                        } else {
-                            ui.selectable_value(&mut self.export.format, Format::Mp4, "MP4");
-                            ui.selectable_value(&mut self.export.format, Format::WebM, "WebM");
-                            ui.selectable_value(&mut self.export.format, Format::Gif, "GIF");
+                        let r = ui.add_enabled(has_input, egui::Checkbox::new(&mut self.export.match_input, "Match input"));
+                        if r.on_hover_text("Size, length, frame rate and format follow the input").on_disabled_hover_text("Load an input first").changed() {
+                            self.export.lock &= !self.export.match_input;
+                            changed = true;
+                        }
+                        let r = ui.checkbox(&mut self.export.lock, "Lock");
+                        if r.on_hover_text("Keep size, length, frame rate and the format choice when a new input is loaded").changed() {
+                            self.export.match_input &= !self.export.lock;
+                            changed = true;
                         }
                     });
                     ui.end_row();
+                    let p = self.export_params();
                     ui.label("Size");
-                    ui.label(format!("{} × {}", self.out_size.0, self.out_size.1));
+                    ui.label(format!("{} × {}", p.size.0, p.size.1));
                     ui.end_row();
-                    if self.timing.mode == OutputMode::Video {
+                    if !image_mode {
                         ui.label("Duration");
-                        ui.add(egui::DragValue::new(&mut self.timing.duration).range(0.5..=3600.0).speed(0.05).suffix(" s"));
+                        if matching && matches!(self.source, Source::Video(_)) {
+                            ui.label(format!("{:.2} s", p.timing.duration));
+                        } else {
+                            ui.add(egui::DragValue::new(&mut self.timing.duration).range(0.5..=3600.0).speed(0.05).suffix(" s"));
+                        }
                         ui.end_row();
                         ui.label("Frame rate");
-                        ui.label(format!("{} fps  ({} frames)", self.timing.fps, self.timing.frame_count()));
+                        let fps = render::format_fps(p.format, p.timing.fps);
+                        let frames = TimingSettings { fps, ..p.timing }.frame_count();
+                        let capped = if fps < p.timing.fps { format!("  ({} takes at most {fps} fps)", p.format.label()) } else { String::new() };
+                        ui.label(format!("{fps} fps  ({frames} frames){capped}"));
                         ui.end_row();
-                        if self.export.format != Format::Gif {
-                            ui.label("Quality");
-                            ui.horizontal(|ui| {
-                                for q in [Quality::Ultra, Quality::High, Quality::Medium, Quality::Low] {
-                                    ui.selectable_value(&mut self.export.quality, q, quality_name(q));
+                    }
+                    if p.format.uses_quality() {
+                        ui.label("Quality");
+                        ui.horizontal(|ui| {
+                            for q in [Quality::Ultra, Quality::High, Quality::Medium, Quality::Low] {
+                                let r = ui.selectable_value(&mut self.export.quality, q, quality_name(q));
+                                if p.format == Format::Gif {
+                                    r.on_hover_text(format!("{} colors", q.gif_colors()));
                                 }
-                            });
-                            ui.end_row();
+                                changed |= self.export.quality == q && self.settings.quality != quality_name(q);
+                            }
+                        });
+                        ui.end_row();
+                    }
+                    if !image_mode {
+                        if p.format.supports_audio() {
                             ui.label("Audio");
                             ui.horizontal(|ui| {
                                 let what = match (self.audio.export_source(), self.audio.src) {
@@ -1443,13 +1570,36 @@ impl PhthoraApp {
                             });
                             ui.end_row();
                         }
-                        if self.export.format == Format::Mp4 && self.engine.background[3] < 1.0 {
-                            ui.label("");
-                            ui.label(egui::RichText::new("MP4 has no transparency: exported on an opaque background").small().weak());
+                        // also used for formats without sound: it moves the track the audio modulators follow
+                        if self.audio.export_source().is_some() {
+                            ui.label("Audio start");
+                            let max = self.audio.track.as_ref().map_or(3600.0, |t| (t.duration() - 0.05).max(0.0));
+                            ui.add(egui::DragValue::new(&mut self.export.audio_start).range(0.0..=max).speed(0.05).suffix(" s"))
+                                .on_hover_text("Where the exported sound starts in the track, added to the trim of the Audio window. Audio modulators follow it.");
                             ui.end_row();
                         }
                     }
+                    if !p.format.supports_alpha() && self.engine.background[3] < 1.0 {
+                        ui.label("");
+                        ui.label(egui::RichText::new(format!("{} has no transparency: exported on an opaque background", p.format.label())).small().weak());
+                        ui.end_row();
+                    }
                 });
+                let p = self.export_params();
+                if p.format == Format::Gif && !image_mode && render::gif_is_large(p.size.0, p.timing.duration, p.timing.fps) {
+                    let e = render::gif_estimate(p.size.0, p.size.1, p.timing.fps, p.timing.duration, self.export.quality);
+                    ui.add_space(6.0);
+                    ui.scope(|ui| {
+                        ui.set_max_width(380.0);
+                        let text = format!(
+                            "This GIF is large: about {} to {}, and encoding it needs around {} of memory. WebP or MP4 are far smaller; a lower size, length or frame rate helps.",
+                            fmt_mb(e.size_mb.0),
+                            fmt_mb(e.size_mb.1),
+                            fmt_mb(e.memory_mb)
+                        );
+                        ui.label(egui::RichText::new(text).color(Color32::from_rgb(235, 190, 60)));
+                    });
+                }
             });
             ui.separator();
             if let Some((_, p, t0)) = &self.export.running {
@@ -1464,6 +1614,9 @@ impl PhthoraApp {
                 start = true;
             }
         });
+        if changed {
+            self.store_export_choices();
+        }
         if cancel
             && let Some((_, p, _)) = &self.export.running {
                 p.cancel.store(true, Ordering::Relaxed);
@@ -1536,6 +1689,32 @@ fn quality_name(q: Quality) -> &'static str {
         Quality::High => "high",
         Quality::Medium => "medium",
         Quality::Low => "low",
+    }
+}
+
+/// Hover text of a format button in the export window.
+fn format_hint(f: Format) -> &'static str {
+    match f {
+        Format::Mp4 => "H.264 video with sound",
+        Format::WebM => "VP9 video with sound and transparency",
+        Format::Gif => "Looping animation, 256 colors at most, transparent or not; big files",
+        Format::Webp => "Looping animation with transparency, much smaller than GIF",
+        Format::Apng => "Looping animation with transparency, lossless",
+        Format::PngSeq => "A folder with one transparent PNG per frame",
+        Format::Png => "Lossless, keeps transparency",
+        Format::Jpg => "Small photo format, no transparency",
+        Format::WebpStill => "Small, keeps transparency",
+    }
+}
+
+/// "850 MB" / "2.3 GB" for the GIF warning.
+fn fmt_mb(mb: f64) -> String {
+    if mb >= 1000.0 {
+        format!("{:.1} GB", mb / 1000.0)
+    } else if mb >= 10.0 {
+        format!("{:.0} MB", mb)
+    } else {
+        format!("{:.1} MB", mb)
     }
 }
 

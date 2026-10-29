@@ -6,7 +6,7 @@ use phthora_core::modulator::LiveInputs;
 use phthora_core::{EffectInstance, OutputMode, Playback, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Readback};
 use phthora_media::{AudioSource, Backend, EncodeSettings, Encoder, Format, MediaKind, Quality};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -60,6 +60,55 @@ pub fn job_timing(job: &ExportJob) -> TimingSettings {
     }
     t.fps = format_fps(job.format, t.fps);
     t
+}
+
+/// Export format that matches an input file: its own container where there is an export
+/// format for it (GIF, WebM, WebP, PNG/APNG, JPG), else MP4 for moving and PNG for still
+/// inputs. `still_mode` is the output mode: a still input exported as video gets MP4.
+pub fn matched_format(kind: MediaKind, input: &Path, still_mode: bool) -> Format {
+    let moving = kind != MediaKind::Image;
+    let ext = input.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let same = match (ext.as_str(), moving) {
+        ("gif", _) => Format::Gif,
+        ("webm", _) => Format::WebM,
+        ("webp", true) => Format::Webp,
+        ("webp", false) => Format::WebpStill,
+        ("png" | "apng", true) => Format::Apng,
+        ("png", false) => Format::Png,
+        ("jpg" | "jpeg", _) => Format::Jpg,
+        (_, true) => Format::Mp4,
+        (_, false) => Format::Png,
+    };
+    match (same.is_still(), still_mode) {
+        (a, b) if a == b => same,
+        (_, true) => Format::Png,
+        (_, false) => Format::Mp4,
+    }
+}
+
+/// GIFs beyond this are big: wider than 800 px, longer than 10 s or faster than 30 fps.
+pub fn gif_is_large(width: u32, duration: f64, fps: f64) -> bool {
+    width > 800 || duration > 10.0 || fps > 30.0
+}
+
+/// Rough size and memory of a GIF export, for the warning in the export window.
+pub struct GifEstimate {
+    /// likely range in MB: smooth gradients to film grain
+    pub size_mb: (f64, f64),
+    /// ffmpeg keeps every frame while it builds the palette
+    pub memory_mb: f64,
+}
+
+/// Bytes per pixel and frame measured on effect clips (flat test pattern 0.05, smooth gradients 0.13, a video
+/// with grain 0.19, VHS noise 1.1 at 256 colors; fewer colors give smaller files).
+pub fn gif_estimate(width: u32, height: u32, fps: f64, duration: f64, quality: Quality) -> GifEstimate {
+    let px = width as f64 * height as f64 * (format_fps(Format::Gif, fps) * duration).round().max(1.0);
+    let colors = match quality {
+        Quality::Ultra | Quality::High => 1.0,
+        Quality::Medium => 0.85,
+        Quality::Low => 0.7,
+    };
+    GifEstimate { size_mb: (px * 0.05 * colors / 1e6, px * 1.15 * colors / 1e6), memory_mb: px * 4.0 * 1.2 / 1e6 + 70.0 }
 }
 
 /// Render every frame of the job and hand it to `sink` (top-down, straight RGBA8).
@@ -163,6 +212,76 @@ fn encode(ctx: &GpuContext, job: &ExportJob, progress: &Progress) -> Result<Path
         (Err(e), Ok(Ok(enc))) => {
             enc.cancel();
             Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matching_the_input_format() {
+        let f = |kind, name: &str, still| matched_format(kind, Path::new(name), still);
+        assert_eq!(f(MediaKind::Video, "a.mp4", false), Format::Mp4);
+        assert_eq!(f(MediaKind::Video, "a.MKV", false), Format::Mp4);
+        assert_eq!(f(MediaKind::Video, "a.webm", false), Format::WebM);
+        assert_eq!(f(MediaKind::Gif, "a.gif", false), Format::Gif);
+        assert_eq!(f(MediaKind::Video, "a.webp", false), Format::Webp);
+        assert_eq!(f(MediaKind::Image, "a.png", true), Format::Png);
+        assert_eq!(f(MediaKind::Image, "a.JPG", true), Format::Jpg);
+        assert_eq!(f(MediaKind::Image, "a.webp", true), Format::WebpStill);
+        assert_eq!(f(MediaKind::Image, "a.bmp", true), Format::Png);
+        // output mode wins over the input kind
+        assert_eq!(f(MediaKind::Image, "a.jpg", false), Format::Mp4);
+        assert_eq!(f(MediaKind::Video, "a.mp4", true), Format::Png);
+    }
+
+    #[test]
+    fn gif_warning_thresholds() {
+        assert!(!gif_is_large(800, 10.0, 30.0));
+        assert!(gif_is_large(801, 4.0, 25.0) && gif_is_large(640, 10.5, 25.0) && gif_is_large(640, 4.0, 31.0));
+    }
+
+    #[test]
+    fn gif_estimate_matches_measurements() {
+        // measured: 1280x720, 100 frames, flat test pattern: 4.6 MB, 476 MB of memory
+        let e = gif_estimate(1280, 720, 25.0, 4.0, Quality::High);
+        assert!(e.size_mb.0 < 4.6 * 1.1 && e.size_mb.1 > 4.6, "{:?}", e.size_mb);
+        assert!((e.memory_mb - 476.0).abs() < 80.0, "{}", e.memory_mb);
+        // 60 fps counts as 50 (the GIF limit), fewer colors are smaller
+        let a = gif_estimate(640, 360, 60.0, 2.0, Quality::High);
+        let b = gif_estimate(640, 360, 50.0, 2.0, Quality::High);
+        assert_eq!(a.size_mb, b.size_mb);
+        assert!(gif_estimate(640, 360, 25.0, 2.0, Quality::Low).size_mb.1 < gif_estimate(640, 360, 25.0, 2.0, Quality::High).size_mb.1);
+    }
+
+    #[test]
+    fn job_timing_limits_gif_and_stills() {
+        let mut job = ExportJob {
+            input: None,
+            playback: Playback::default(),
+            effects: Vec::new(),
+            timing: TimingSettings { fps: 60.0, ..Default::default() },
+            width: 64,
+            height: 64,
+            background: [0.0; 4],
+            flip_x: false,
+            format: Format::Gif,
+            quality: Quality::High,
+            backend: Backend::Software,
+            audio: None,
+            audio_track: None,
+            audio_settings: AudioSettings::default(),
+            midi: MidiValues::new(),
+            out: PathBuf::new(),
+        };
+        assert_eq!(job_timing(&job).fps, 50.0);
+        job.format = Format::Webp;
+        assert_eq!(job_timing(&job).fps, 60.0);
+        for f in [Format::Png, Format::Jpg, Format::WebpStill] {
+            job.format = f;
+            assert_eq!(job_timing(&job).mode, OutputMode::Image);
         }
     }
 }

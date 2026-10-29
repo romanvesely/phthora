@@ -37,6 +37,11 @@ pub struct Settings {
     pub input_dir: Option<PathBuf>,
     pub background: [f32; 4],
     pub quality: String,
+    /// remembered export formats for video and for still images (`Format::id`)
+    pub export_video_format: String,
+    pub export_still_format: String,
+    /// export size, length, frame rate and format follow the input
+    pub export_match_input: bool,
     pub flip_x: bool,
     /// encode MP4 on the GPU (VAAPI) when available
     pub hw_encode: bool,
@@ -56,6 +61,9 @@ impl Default for Settings {
             input_dir: None,
             background: [0.0, 0.0, 0.0, 1.0],
             quality: "high".into(),
+            export_video_format: "mp4".into(),
+            export_still_format: "png".into(),
+            export_match_input: false,
             flip_x: false,
             hw_encode: true,
             audio: Default::default(),
@@ -141,6 +149,15 @@ pub fn preset_path(name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_settings_files_get_export_defaults() {
+        // a settings file from before the export formats were remembered
+        let s: Settings = serde_json::from_str(r#"{"quality":"low","flip_x":true}"#).unwrap();
+        assert_eq!((s.quality.as_str(), s.export_video_format.as_str(), s.export_still_format.as_str(), s.export_match_input), ("low", "mp4", "png", false));
+        let s2: Settings = serde_json::from_str(&serde_json::to_string(&Settings { export_video_format: "webp".into(), export_match_input: true, ..Settings::default() }).unwrap()).unwrap();
+        assert_eq!((s2.export_video_format.as_str(), s2.export_match_input), ("webp", true));
+    }
+
     #[test]
     fn names() {
         assert_eq!(sanitize_name("  my/preset!*  "), "mypreset");
