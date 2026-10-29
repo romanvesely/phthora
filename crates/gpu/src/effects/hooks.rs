@@ -9,6 +9,8 @@ use phthora_core::{EffectDesc, OutputMode, ResolvedEffect};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+pub mod blue_noise;
+
 pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn ShaderHook>> {
     Some(match desc.id.as_str() {
         "eight_bit" => Box::new(Cga::default()),
@@ -19,6 +21,7 @@ pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn Shade
         "vhs" => Box::new(Vhs::default()),
         "super8" => Box::new(Super8::default()),
         "ascii" => Box::new(Ascii::default()),
+        "dither" => Box::new(Dither::default()),
         "caption" => Box::new(Caption::default()),
         "audio_visualizer" => Box::new(Visualizer::default()),
         "push_draw" | "mask_draw" => Box::new(PaintTex { kind: crate::paint::PaintKind::of(&desc.id)?, uploaded: None, tex: None, seed: 0.0 }),
@@ -351,26 +354,74 @@ pub fn ascii_charset(name: &str) -> &'static str {
 impl ShaderHook for Ascii {
     fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
         let set = e.s("charSet");
-        if self.atlas.is_some() && self.set == set {
+        let custom = (set == "Custom").then(|| e.s("customChars"));
+        let key = format!("{set}|{}", custom.unwrap_or_default());
+        if self.atlas.is_some() && self.set == key {
             return;
         }
-        let chars = ascii_charset(set);
-        let n = chars.chars().count();
         const CELL: u32 = 8;
         let fonts = rc.assets.font("Pixel");
-        let mut c = TextCanvas::new(CELL * n as u32, CELL);
-        c.fill_rect(0.0, 0.0, (CELL * n as u32) as f32, CELL as f32, [0, 0, 0, 255]);
-        c.draw_text(&fonts, CELL as f32, chars, 0.0, 0.0, Align::Left, Some([255, 255, 255]), None, true);
+        let c = match custom {
+            Some(text) => {
+                // darkest to brightest by rendered coverage, one glyph per cell
+                let mut chars = TextCanvas::sort_by_coverage(&fonts, CELL as f32, text);
+                if chars.is_empty() {
+                    chars = ascii_charset("Barysh").to_string();
+                }
+                let n = chars.chars().count();
+                self.count = n;
+                let mut c = TextCanvas::new(CELL * n as u32, CELL);
+                c.fill_rect(0.0, 0.0, (CELL * n as u32) as f32, CELL as f32, [0, 0, 0, 255]);
+                for (i, ch) in chars.chars().enumerate() {
+                    c.draw_text(&fonts, CELL as f32, &ch.to_string(), (i as u32 * CELL) as f32, 0.0, Align::Left, Some([255, 255, 255]), None, true);
+                }
+                c
+            }
+            None => {
+                let chars = ascii_charset(set);
+                let n = chars.chars().count();
+                self.count = n;
+                let mut c = TextCanvas::new(CELL * n as u32, CELL);
+                c.fill_rect(0.0, 0.0, (CELL * n as u32) as f32, CELL as f32, [0, 0, 0, 255]);
+                c.draw_text(&fonts, CELL as f32, chars, 0.0, 0.0, Align::Left, Some([255, 255, 255]), None, true);
+                c
+            }
+        };
         let data = c.to_rgba_straight();
         self.atlas = Some(Rc::new(assets::texture_from_rgba(rc.ctx, c.width(), c.height(), &data, true, "ascii")));
-        self.set = set.to_string();
-        self.count = n;
+        self.set = key;
     }
     fn uniform(&self, key: &str) -> Option<UVal> {
         (key == "fontCharCount").then_some(UVal::F(self.count as f32))
     }
     fn texture(&self, name: &str) -> Option<TexInput<'_>> {
         (name == "tFont").then(|| self.atlas.as_ref().map(|t| tex(t, SamplerKind::NearestClamp))).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- Dither
+
+#[derive(Default)]
+struct Dither {
+    noise: Option<Rc<Target>>,
+    frame: f32,
+}
+
+impl ShaderHook for Dither {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        // animation clock: the frame index in video mode, offset by the instance seed (stills keep only the seed)
+        let frame = if rc.ft.mode == OutputMode::Video { rc.ft.frame } else { 0 };
+        self.frame = ((frame + (e.seed * 997.0) as u64) % 65536) as f32;
+        if self.noise.is_none() && e.s("mode") == "Blue Noise" {
+            let n = blue_noise::SIZE as u32;
+            self.noise = Some(Rc::new(assets::texture_from_rgba(rc.ctx, n, n, &blue_noise::rgba(), false, "blue noise")));
+        }
+    }
+    fn uniform(&self, key: &str) -> Option<UVal> {
+        (key == "animFrame").then_some(UVal::F(self.frame))
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        (name == "tNoise").then(|| self.noise.as_ref().map(|t| tex(t, SamplerKind::NearestClamp))).flatten()
     }
 }
 
