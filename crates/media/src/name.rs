@@ -1,7 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `<stem up to 30 chars>-phthora-YYYYMMDD-HHMMSS.<ext>` in local time
-/// (UTC where the local offset is unavailable).
+/// (UTC where the local offset is unavailable). An empty `ext` gives a name without
+/// extension, e.g. for the folder of a PNG sequence.
 pub fn default_export_name(input_stem: &str, ext: &str) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21,7 +22,9 @@ pub fn export_name_at(input_stem: &str, ext: &str, local_unix_secs: i64) -> Stri
     let stem = stem.trim();
     let stem = if stem.is_empty() { "output" } else { stem };
     let (y, mo, d, h, mi, s) = civil(local_unix_secs);
-    format!("{stem}-phthora-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}.{}", ext.trim_start_matches('.'))
+    let ext = ext.trim_start_matches('.');
+    let dot = if ext.is_empty() { "" } else { "." };
+    format!("{stem}-phthora-{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}{dot}{ext}")
 }
 
 /// Unix seconds -> (year, month, day, hour, minute, second), proleptic Gregorian.
@@ -98,6 +101,7 @@ mod tests {
         assert!(long.starts_with(&format!("{}-phthora-", "x".repeat(30))));
         assert!(long.ends_with(".gif"));
         assert!(export_name_at("", "png", 0).starts_with("output-phthora-"));
+        assert_eq!(export_name_at("clip", "", 1_000_000_000), "clip-phthora-20010909-014640");
         let now = default_export_name("a", "webm");
         assert!(now.starts_with("a-phthora-") && now.ends_with(".webm"));
     }

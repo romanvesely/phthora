@@ -1,7 +1,9 @@
-//! Encoder: raw RGBA frames -> ffmpeg stdin -> MP4 / WebM / GIF / PNG.
+//! Encoder: raw RGBA frames -> ffmpeg stdin -> MP4 / WebM / GIF / WebP / APNG / PNG sequence,
+//! or a single still (PNG / JPG / WebP).
 
+use std::collections::HashSet;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,17 +17,96 @@ pub enum Format {
     Mp4,
     WebM,
     Gif,
+    /// Animated WebP.
+    Webp,
+    /// Animated PNG.
+    Apng,
+    /// One PNG file per frame, see [`EncodeSettings::path`].
+    PngSeq,
+    /// Single PNG still.
     Png,
+    /// Single JPEG still.
+    Jpg,
+    /// Single WebP still.
+    WebpStill,
 }
 
 impl Format {
+    /// Formats for a single image.
+    pub const STILLS: [Format; 3] = [Format::Png, Format::Jpg, Format::WebpStill];
+    /// Formats for moving pictures.
+    pub const ANIMATED: [Format; 6] = [Format::Mp4, Format::WebM, Format::Gif, Format::Webp, Format::Apng, Format::PngSeq];
+
+    /// File extension; empty for [`Format::PngSeq`], which is a folder.
     pub fn extension(self) -> &'static str {
         match self {
             Format::Mp4 => "mp4",
             Format::WebM => "webm",
             Format::Gif => "gif",
+            Format::Webp | Format::WebpStill => "webp",
+            Format::Apng => "apng",
+            Format::PngSeq => "",
             Format::Png => "png",
+            Format::Jpg => "jpg",
         }
+    }
+
+    /// Short name for buttons.
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Mp4 => "MP4",
+            Format::WebM => "WebM",
+            Format::Gif => "GIF",
+            Format::Webp | Format::WebpStill => "WebP",
+            Format::Apng => "APNG",
+            Format::PngSeq => "PNG sequence",
+            Format::Png => "PNG",
+            Format::Jpg => "JPG",
+        }
+    }
+
+    /// Stable name for settings files.
+    pub fn id(self) -> &'static str {
+        match self {
+            Format::Mp4 => "mp4",
+            Format::WebM => "webm",
+            Format::Gif => "gif",
+            Format::Webp => "webp",
+            Format::Apng => "apng",
+            Format::PngSeq => "png_seq",
+            Format::Png => "png",
+            Format::Jpg => "jpg",
+            Format::WebpStill => "webp_still",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Format> {
+        Self::STILLS.iter().chain(Self::ANIMATED.iter()).copied().find(|f| f.id() == id)
+    }
+
+    /// Format for an output file name, e.g. from the command line. A name with a `%05d`
+    /// style number is a PNG sequence; `.webp` is a still unless `animated_webp`.
+    pub fn from_path(path: &Path, animated_webp: bool) -> Option<Format> {
+        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        if name.contains('%') {
+            return name.ends_with(".png").then_some(Format::PngSeq);
+        }
+        Some(match path.extension()?.to_string_lossy().to_lowercase().as_str() {
+            "mp4" => Format::Mp4,
+            "webm" => Format::WebM,
+            "gif" => Format::Gif,
+            "apng" => Format::Apng,
+            "png" => Format::Png,
+            "jpg" | "jpeg" => Format::Jpg,
+            "webp" if animated_webp => Format::Webp,
+            "webp" => Format::WebpStill,
+            _ => return None,
+        })
+    }
+
+    /// Single image rather than a moving picture.
+    pub fn is_still(self) -> bool {
+        matches!(self, Format::Png | Format::Jpg | Format::WebpStill)
     }
 
     /// Whether the format can carry an audio track.
@@ -35,8 +116,99 @@ impl Format {
 
     /// Whether the format keeps the alpha channel.
     pub fn supports_alpha(self) -> bool {
-        matches!(self, Format::WebM | Format::Gif | Format::Png)
+        !matches!(self, Format::Mp4 | Format::Jpg)
     }
+
+    /// Whether [`Quality`] changes the output (lossless formats ignore it).
+    pub fn uses_quality(self) -> bool {
+        !matches!(self, Format::Apng | Format::PngSeq | Format::Png)
+    }
+
+    /// Highest frame rate the format can store. GIF delays are whole hundredths of a second.
+    pub fn max_fps(self) -> Option<f64> {
+        (self == Format::Gif).then_some(50.0)
+    }
+
+    /// ffmpeg encoder this format needs (the software one for MP4).
+    pub fn encoder_name(self) -> &'static str {
+        match self {
+            Format::Mp4 => "libx264",
+            Format::WebM => "libvpx-vp9",
+            Format::Gif => "gif",
+            Format::Webp => "libwebp_anim",
+            Format::WebpStill => "libwebp",
+            Format::Apng => "apng",
+            Format::PngSeq | Format::Png => "png",
+            Format::Jpg => "mjpeg",
+        }
+    }
+}
+
+/// Encoder names of the installed ffmpeg, read once. `None` when ffmpeg cannot be run.
+fn ffmpeg_encoders() -> Option<&'static HashSet<String>> {
+    static ENC: std::sync::OnceLock<Option<HashSet<String>>> = std::sync::OnceLock::new();
+    ENC.get_or_init(|| {
+        let out = ffmpeg_cmd().arg("-encoders").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        Some(parse_encoders(&String::from_utf8_lossy(&out.stdout)))
+    })
+    .as_ref()
+}
+
+/// Names from `ffmpeg -encoders`; lines look like ` V....D libwebp_anim   libwebp WebP image`.
+fn parse_encoders(text: &str) -> HashSet<String> {
+    text.lines().filter_map(|l| l.split_whitespace().nth(1)).map(str::to_string).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoder_list_parsing() {
+        let text = "Encoders:\n V..... = Video\n ------\n V....D apng                 APNG image\n V....D libwebp_anim         libwebp WebP image (codec webp)\n A....D aac                  AAC\n";
+        let set = parse_encoders(text);
+        assert!(set.contains("apng") && set.contains("libwebp_anim") && set.contains("aac"));
+        assert!(!set.contains("libwebp"));
+    }
+
+    #[test]
+    fn formats_from_names() {
+        let f = |p: &str, anim| Format::from_path(Path::new(p), anim);
+        assert_eq!(f("a.MP4", false), Some(Format::Mp4));
+        assert_eq!(f("a.webm", false), Some(Format::WebM));
+        assert_eq!(f("a.gif", false), Some(Format::Gif));
+        assert_eq!(f("a.apng", false), Some(Format::Apng));
+        assert_eq!(f("a.png", false), Some(Format::Png));
+        assert_eq!(f("a.jpeg", false), Some(Format::Jpg));
+        assert_eq!(f("a.webp", false), Some(Format::WebpStill));
+        assert_eq!(f("a.webp", true), Some(Format::Webp));
+        assert_eq!(f("out/frame-%05d.png", false), Some(Format::PngSeq));
+        assert_eq!(f("frame-%05d.jpg", false), None);
+        assert_eq!(f("a.txt", false), None);
+        assert_eq!(f("noext", false), None);
+    }
+
+    #[test]
+    fn sequence_paths() {
+        let mut s = EncodeSettings::new("out/clip", Format::PngSeq, 8, 8, 10.0, 1.0);
+        assert_eq!(output_path(&s), PathBuf::from("out/clip/clip-%05d.png"));
+        s.path = "x/f_%03d.png".into();
+        assert_eq!(output_path(&s), PathBuf::from("x/f_%03d.png"));
+    }
+}
+
+/// The ffmpeg encoder `format` needs, if this ffmpeg build lacks it.
+pub fn missing_encoder(format: Format) -> Option<&'static str> {
+    let name = format.encoder_name();
+    match ffmpeg_encoders() {
+        Some(set) if !set.contains(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// True if ffmpeg can encode `format` (software path).
+pub fn format_available(format: Format) -> bool {
+    crate::ffmpeg_available() && missing_encoder(format).is_none()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +227,35 @@ impl Quality {
             Quality::High => 23,
             Quality::Medium => 31,
             Quality::Low => 39,
+        }
+    }
+
+    /// libwebp quality factor (0..100) for lossy WebP.
+    pub fn webp_quality(self) -> u32 {
+        match self {
+            Quality::Ultra => 95,
+            Quality::High => 85,
+            Quality::Medium => 70,
+            Quality::Low => 50,
+        }
+    }
+
+    /// MJPEG `-q:v` scale (2 best .. 31 worst).
+    pub fn jpeg_qscale(self) -> u32 {
+        match self {
+            Quality::Ultra => 2,
+            Quality::High => 4,
+            Quality::Medium => 8,
+            Quality::Low => 14,
+        }
+    }
+
+    /// GIF palette size.
+    pub fn gif_colors(self) -> u32 {
+        match self {
+            Quality::Ultra | Quality::High => 256,
+            Quality::Medium => 128,
+            Quality::Low => 64,
         }
     }
 
@@ -90,13 +291,16 @@ pub struct AudioSource {
 
 #[derive(Debug, Clone)]
 pub struct EncodeSettings {
+    /// Output file. For [`Format::PngSeq`]: a pattern like `dir/name-%05d.png`, or a folder
+    /// (frames go inside as `<folder name>-%05d.png`; created if missing).
     pub path: PathBuf,
     pub format: Format,
     pub width: u32,
     pub height: u32,
+    /// GIF takes at most 50 (see [`Format::max_fps`]).
     pub fps: f64,
     pub quality: Quality,
-    /// Ignored for GIF and PNG.
+    /// Only used for MP4 and WebM.
     pub audio: Option<AudioSource>,
     /// Planned output length in seconds; used for [`Encoder::expected_frames`].
     pub duration: f64,
@@ -128,6 +332,8 @@ pub struct Encoder {
     stdin: Option<ChildStdin>,
     tail: Option<StderrTail>,
     path: PathBuf,
+    /// frame file pattern of a PNG sequence
+    seq: Option<PathBuf>,
     frame_len: usize,
     max_frames: Option<u64>,
     expected: u64,
@@ -201,8 +407,15 @@ fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
         (Format::Mp4, Backend::Vaapi) => format!("[0:v]{COLOR_SCALE},format=nv12,hwupload[v]"),
         (Format::Mp4, _) => format!("[0:v]{COLOR_SCALE},format=yuv420p[v]"),
         (Format::WebM, _) => format!("[0:v]{COLOR_SCALE},format=yuva420p[v]"),
-        (Format::Gif, _) => "[0:v]split[s0][s1];[s0]palettegen=stats_mode=diff:max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3[v]".to_string(),
-        (Format::Png, _) => "[0:v]format=rgba[v]".to_string(),
+        // One palette from the statistics of all frames, error-diffusion dither (no visible
+        // pattern), unchanged areas are not dithered again. Measured against the other
+        // recipes on effect clips: best similarity per byte, see the encoder tests.
+        (Format::Gif, _) => format!(
+            "[0:v]split[s0][s1];[s0]palettegen=stats_mode=full:max_colors={}[p];[s1][p]paletteuse=dither=floyd_steinberg:diff_mode=rectangle[v]",
+            s.quality.gif_colors()
+        ),
+        (Format::Jpg, _) => format!("[0:v]format={}[v]", if s.quality == Quality::Ultra { "yuvj444p" } else { "yuvj420p" }),
+        (Format::Webp | Format::WebpStill | Format::Apng | Format::PngSeq | Format::Png, _) => "[0:v]format=rgba[v]".to_string(),
     };
     let graph = if with_audio {
         format!("{vgraph};[1:a]{}[a]", audio_chain(s.audio.as_ref().unwrap()))
@@ -240,7 +453,12 @@ fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
             }
         }
         Format::Gif => push(&["-r", &fps, "-loop", "0"]),
+        Format::Webp => push(&["-c:v", "libwebp_anim", "-quality", &s.quality.webp_quality().to_string(), "-compression_level", "4", "-loop", "0", "-r", &fps]),
+        Format::Apng => push(&["-c:v", "apng", "-plays", "0", "-f", "apng", "-r", &fps]),
+        Format::PngSeq => push(&["-c:v", "png", "-start_number", "1", "-r", &fps]),
         Format::Png => push(&["-frames:v", "1", "-update", "1"]),
+        Format::Jpg => push(&["-c:v", "mjpeg", "-q:v", &s.quality.jpeg_qscale().to_string(), "-frames:v", "1", "-update", "1"]),
+        Format::WebpStill => push(&["-c:v", "libwebp", "-quality", &s.quality.webp_quality().to_string(), "-frames:v", "1"]),
     }
     if with_audio {
         push(&["-shortest"]);
@@ -248,8 +466,37 @@ fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
     if s.deterministic {
         push(&["-threads", "1", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact", "-map_metadata", "-1"]);
     }
-    a.push(s.path.to_string_lossy().into_owned());
+    a.push(output_path(s).to_string_lossy().into_owned());
     a
+}
+
+/// File (or `%05d` pattern) ffmpeg writes to.
+fn output_path(s: &EncodeSettings) -> PathBuf {
+    if s.format != Format::PngSeq || s.path.to_string_lossy().contains('%') {
+        return s.path.clone();
+    }
+    let name = s.path.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty()).unwrap_or_else(|| "frame".into());
+    s.path.join(format!("{name}-%05d.png"))
+}
+
+/// Delete the files a PNG sequence pattern covers (`name-00001.png` ...), then the folder if
+/// that left it empty. Nothing else in the folder is touched.
+fn clear_sequence(pattern: &Path) {
+    let (Some(dir), Some(name)) = (pattern.parent(), pattern.file_name().map(|n| n.to_string_lossy().into_owned())) else { return };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    // `%05d` -> prefix and suffix around a run of digits
+    let Some(pct) = name.find('%') else { return };
+    let Some(d) = name[pct..].find('d') else { return };
+    let (prefix, suffix) = (&name[..pct], &name[pct + d + 1..]);
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let f = e.file_name().to_string_lossy().into_owned();
+        let digits = f.strip_prefix(prefix).and_then(|r| r.strip_suffix(suffix));
+        if digits.is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    let _ = std::fs::remove_dir(dir);
 }
 
 impl Encoder {
@@ -267,6 +514,15 @@ impl Encoder {
         if matches!(s.format, Format::Mp4 | Format::WebM) && (!s.width.is_multiple_of(2) || !s.height.is_multiple_of(2)) {
             return bad("width and height must be even for MP4/WebM");
         }
+        if let Some(max) = s.format.max_fps()
+            && s.fps > max + 1e-6 {
+                return bad(&format!("{} takes at most {max} fps", s.format.label()));
+            }
+        // the VAAPI path does not use libx264
+        if !(s.format == Format::Mp4 && s.backend == Backend::Vaapi)
+            && let Some(enc) = missing_encoder(s.format) {
+                return bad(&format!("this ffmpeg has no {} encoder ({enc}), so {} cannot be written", s.format.label(), s.format.label()));
+            }
         if s.backend == Backend::Vaapi && s.format != Format::Mp4 {
             return bad("VAAPI backend only supports MP4");
         }
@@ -282,7 +538,13 @@ impl Encoder {
                 }
                 with_audio = true;
             }
-        if let Some(dir) = s.path.parent()
+        let out = output_path(s);
+        let seq = (s.format == Format::PngSeq).then(|| out.clone());
+        if let Some(p) = &seq {
+            // frames of an earlier export must not mix with the new ones
+            clear_sequence(p);
+        }
+        if let Some(dir) = out.parent()
             && !dir.as_os_str().is_empty() && !dir.exists() {
                 std::fs::create_dir_all(dir)?;
             }
@@ -300,8 +562,9 @@ impl Encoder {
             stdin,
             tail: Some(tail),
             path: settings.path.clone(),
+            seq,
             frame_len: settings.width as usize * settings.height as usize * 4,
-            max_frames: (settings.format == Format::Png).then_some(1),
+            max_frames: settings.format.is_still().then_some(1),
             expected: (settings.duration * settings.fps).round().max(0.0) as u64,
             written: Arc::new(AtomicU64::new(0)),
         })
@@ -318,7 +581,7 @@ impl Encoder {
             )));
         }
         if self.max_frames.is_some_and(|m| self.written.load(Ordering::Relaxed) >= m) {
-            return Err(MediaError::InvalidInput("PNG output takes exactly one frame".into()));
+            return Err(MediaError::InvalidInput("a still image takes exactly one frame".into()));
         }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(MediaError::InvalidInput("encoder already finished".into()));
@@ -352,7 +615,8 @@ impl Encoder {
         self.expected
     }
 
-    /// Close the input, wait for ffmpeg and return the output path.
+    /// Close the input, wait for ffmpeg and return the output path (the folder or pattern of
+    /// a PNG sequence, as given in the settings).
     pub fn finish(mut self) -> Result<PathBuf> {
         drop(self.stdin.take());
         let status = self.child.take().map(|mut c| c.wait());
@@ -360,7 +624,7 @@ impl Encoder {
         match status {
             Some(Ok(st)) if st.success() => Ok(self.path.clone()),
             other => {
-                let _ = std::fs::remove_file(&self.path);
+                self.remove_output();
                 let context = match other {
                     Some(Ok(st)) => format!("exit status {st}"),
                     Some(Err(e)) => e.to_string(),
@@ -385,7 +649,17 @@ impl Encoder {
         if let Some(t) = self.tail.take() {
             let _ = t.finish();
         }
-        let _ = std::fs::remove_file(&self.path);
+        self.remove_output();
+    }
+
+    /// Delete what was written so far.
+    fn remove_output(&self) {
+        match &self.seq {
+            Some(pattern) => clear_sequence(pattern),
+            None => {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
     }
 
     fn collect_failure(&mut self, io: Option<std::io::Error>) -> MediaError {
