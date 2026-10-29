@@ -6,7 +6,9 @@ use crate::params::{ParamKind, Value};
 use crate::registry::{self, EffectDesc};
 use rand::Rng;
 use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_UID: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +34,66 @@ pub struct EffectInstance {
     pub data: BTreeMap<String, String>,
     /// bumped when a "button" param is pressed: (key, counter)
     pub triggers: BTreeMap<String, u64>,
+    /// uid of the group this effect belongs to
+    pub group: Option<u64>,
+}
+
+/// How a group's result is combined with the image going into the group.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupBlend {
+    /// the group's result (laid over its input when isolated)
+    #[default]
+    Normal,
+    /// the group's alpha cuts out its input
+    Mask,
+    /// the group's result goes behind its input
+    Behind,
+}
+
+impl GroupBlend {
+    pub const ALL: [GroupBlend; 3] = [GroupBlend::Normal, GroupBlend::Mask, GroupBlend::Behind];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GroupBlend::Normal => "Normal",
+            GroupBlend::Mask => "Mask",
+            GroupBlend::Behind => "Behind",
+        }
+    }
+}
+
+/// A run of effects rendered together. Members are contiguous in the stack, one level deep.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub uid: u64,
+    pub name: String,
+    pub enabled: bool,
+    pub locked: bool,
+    pub expanded: bool,
+    /// members start from a transparent image instead of the group's input
+    pub isolate: bool,
+    pub blend: GroupBlend,
+}
+
+impl Group {
+    pub fn new() -> Self {
+        Self { uid: new_uid(), name: "Group".into(), enabled: true, locked: false, expanded: true, isolate: false, blend: GroupBlend::Normal }
+    }
+}
+
+impl Default for Group {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The group settings a member renders with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupRef {
+    pub uid: u64,
+    pub isolate: bool,
+    pub blend: GroupBlend,
 }
 
 impl EffectInstance {
@@ -54,6 +116,7 @@ impl EffectInstance {
             modulators: BTreeMap::new(),
             data: BTreeMap::new(),
             triggers: BTreeMap::new(),
+            group: None,
         }
     }
 
@@ -150,6 +213,7 @@ impl EffectInstance {
             seed: self.seed,
             data: self.data.clone(),
             triggers: self.triggers.clone(),
+            group: None,
         }
     }
 }
@@ -166,6 +230,7 @@ pub struct ResolvedEffect {
     pub seed: f64,
     pub data: BTreeMap<String, String>,
     pub triggers: BTreeMap<String, u64>,
+    pub group: Option<GroupRef>,
 }
 
 /// Same effect with the same values for this frame: rendering it again gives the same image.
@@ -178,6 +243,7 @@ impl PartialEq for ResolvedEffect {
             && self.seed == o.seed
             && self.data == o.data
             && self.triggers == o.triggers
+            && self.group == o.group
     }
 }
 
@@ -196,6 +262,7 @@ impl ResolvedEffect {
 #[derive(Clone, Debug, Default)]
 pub struct Chain {
     pub effects: Vec<EffectInstance>,
+    pub groups: Vec<Group>,
 }
 
 /// Which texture a mask effect uses as the "un-effected" image.
@@ -203,6 +270,8 @@ pub struct Chain {
 pub enum MaskSource {
     /// input of the enabled effect at this index in the resolved list
     InputOf(usize),
+    /// input of the group whose first member is at this index (before isolation)
+    GroupInput(usize),
     /// nothing above: transparent
     Blank,
 }
@@ -225,13 +294,159 @@ impl Chain {
 
     pub fn remove(&mut self, uid: u64) {
         self.effects.retain(|e| e.uid != uid);
+        self.normalize();
     }
 
+    /// Move an effect; it keeps its group as long as it stays next to it.
     pub fn move_to(&mut self, from: usize, to: usize) {
         if from < self.effects.len() && to < self.effects.len() && from != to {
             let e = self.effects.remove(from);
             self.effects.insert(to, e);
+            if let Some(g) = self.effects[to].group {
+                let near = |i: Option<usize>| i.and_then(|i| self.effects.get(i)).is_some_and(|n| n.group == Some(g));
+                if !near(to.checked_sub(1)) && !near(Some(to + 1)) {
+                    self.effects[to].group = None;
+                }
+            }
+            self.normalize();
         }
+    }
+
+    /// Move an effect to `to` and make it a member of `group` (None: ungrouped).
+    pub fn move_into(&mut self, from: usize, to: usize, group: Option<u64>) {
+        if from >= self.effects.len() || to >= self.effects.len() {
+            return;
+        }
+        let mut e = self.effects.remove(from);
+        e.group = group.filter(|g| self.group(*g).is_some());
+        self.effects.insert(to, e);
+        self.normalize();
+    }
+
+    pub fn group(&self, uid: u64) -> Option<&Group> {
+        self.groups.iter().find(|g| g.uid == uid)
+    }
+
+    pub fn group_mut(&mut self, uid: u64) -> Option<&mut Group> {
+        self.groups.iter_mut().find(|g| g.uid == uid)
+    }
+
+    /// Locked itself or through its group.
+    pub fn is_locked(&self, e: &EffectInstance) -> bool {
+        e.locked || e.group.and_then(|g| self.group(g)).is_some_and(|g| g.locked)
+    }
+
+    /// Index range of a group's members.
+    pub fn group_range(&self, uid: u64) -> Option<Range<usize>> {
+        let start = self.effects.iter().position(|e| e.group == Some(uid))?;
+        let len = self.effects[start..].iter().take_while(|e| e.group == Some(uid)).count();
+        Some(start..start + len)
+    }
+
+    /// Put an effect into a new group of its own; returns the group's uid.
+    pub fn make_group(&mut self, uid: u64) -> Option<u64> {
+        let i = self.index_of(uid)?;
+        let g = Group::new();
+        let gid = g.uid;
+        self.groups.push(g);
+        self.effects[i].group = Some(gid);
+        self.normalize();
+        Some(gid)
+    }
+
+    /// Dissolve a group, keeping its effects in place.
+    pub fn ungroup(&mut self, uid: u64) {
+        for e in &mut self.effects {
+            if e.group == Some(uid) {
+                e.group = None;
+            }
+        }
+        self.groups.retain(|g| g.uid != uid);
+    }
+
+    /// Delete a group and its effects.
+    pub fn remove_group(&mut self, uid: u64) {
+        self.effects.retain(|e| e.group != Some(uid));
+        self.groups.retain(|g| g.uid != uid);
+    }
+
+    /// Copy a group with its effects right after it; returns the new group's uid.
+    pub fn duplicate_group(&mut self, uid: u64) -> Option<u64> {
+        let range = self.group_range(uid)?;
+        let mut g = self.group(uid)?.clone();
+        g.uid = new_uid();
+        let gid = g.uid;
+        let copies: Vec<EffectInstance> = self.effects[range.clone()]
+            .iter()
+            .map(|e| {
+                let mut d = e.duplicate();
+                d.group = Some(gid);
+                d
+            })
+            .collect();
+        self.groups.push(g);
+        self.effects.splice(range.end..range.end, copies);
+        Some(gid)
+    }
+
+    /// Stack blocks: a whole group or a single ungrouped effect.
+    pub fn units(&self) -> Vec<Range<usize>> {
+        let mut v = Vec::new();
+        let mut i = 0;
+        while i < self.effects.len() {
+            let len = match self.effects[i].group {
+                Some(g) => self.effects[i..].iter().take_while(|e| e.group == Some(g)).count(),
+                None => 1,
+            };
+            v.push(i..i + len);
+            i += len;
+        }
+        v
+    }
+
+    /// Swap a group with the block above (`up`) or below it.
+    pub fn move_group(&mut self, uid: u64, up: bool) {
+        let units = self.units();
+        let Some(k) = units.iter().position(|r| self.effects[r.start].group == Some(uid)) else { return };
+        let (a, b) = match up {
+            true if k > 0 => (k - 1, k),
+            false if k + 1 < units.len() => (k, k + 1),
+            _ => return,
+        };
+        let (ra, rb) = (units[a].clone(), units[b].clone());
+        // rotate the two adjacent blocks: b then a
+        self.effects[ra.start..rb.end].rotate_left(ra.len());
+    }
+
+    /// Restore the invariants: members of a group are contiguous (gathered at the first
+    /// member), unknown group ids are cleared and empty groups dropped.
+    pub fn normalize(&mut self) {
+        let known: Vec<u64> = self.groups.iter().map(|g| g.uid).collect();
+        for e in &mut self.effects {
+            if e.group.is_some_and(|g| !known.contains(&g)) {
+                e.group = None;
+            }
+        }
+        let mut done: Vec<u64> = Vec::new();
+        let mut out = Vec::with_capacity(self.effects.len());
+        let mut rest: Vec<Option<EffectInstance>> = std::mem::take(&mut self.effects).into_iter().map(Some).collect();
+        for i in 0..rest.len() {
+            let Some(e) = rest[i].take() else { continue };
+            match e.group {
+                Some(g) if !done.contains(&g) => {
+                    done.push(g);
+                    out.push(e);
+                    for slot in rest.iter_mut().skip(i + 1) {
+                        if slot.as_ref().is_some_and(|x| x.group == Some(g)) {
+                            out.push(slot.take().unwrap());
+                        }
+                    }
+                }
+                _ => out.push(e),
+            }
+        }
+        self.effects = out;
+        self.groups.retain(|g| done.contains(&g.uid));
     }
 
     pub fn duplicate(&mut self, uid: u64) -> Option<u64> {
@@ -242,35 +457,51 @@ impl Chain {
         Some(nuid)
     }
 
-    /// Remove all unlocked effects.
+    /// Remove all unlocked effects (effects in a locked group count as locked).
     pub fn clear_unlocked(&mut self) {
-        self.effects.retain(|e| e.locked);
+        let keep: Vec<bool> = self.effects.iter().map(|e| self.is_locked(e)).collect();
+        let mut k = keep.into_iter();
+        self.effects.retain(|_| k.next().unwrap());
+        self.normalize();
     }
 
     /// Disable all unlocked effects.
     pub fn disable_all(&mut self) {
-        for e in &mut self.effects {
-            if !e.locked {
+        let locked: Vec<bool> = self.effects.iter().map(|e| self.is_locked(e)).collect();
+        for (e, l) in self.effects.iter_mut().zip(locked) {
+            if !l {
                 e.enabled = false;
             }
         }
     }
 
+    /// Random order of the blocks; groups move as a whole.
     pub fn shuffle(&mut self) {
-        self.effects.shuffle(&mut rand::rng());
+        let mut units = self.units();
+        units.shuffle(&mut rand::rng());
+        let mut old: Vec<Option<EffectInstance>> = std::mem::take(&mut self.effects).into_iter().map(Some).collect();
+        self.effects = units.into_iter().flat_map(|r| r.map(|i| old[i].take().unwrap()).collect::<Vec<_>>()).collect();
     }
 
     /// Replace the stack (keeps locked effects that are not in the new set).
-    pub fn replace(&mut self, mut effects: Vec<EffectInstance>, keep_locked: bool) {
+    pub fn replace(&mut self, mut new: Chain, keep_locked: bool) {
         if keep_locked {
-            let locked: Vec<_> = self.effects.iter().filter(|e| e.locked).cloned().collect();
-            for l in locked.into_iter().rev() {
-                if !effects.iter().any(|e| e.desc.id == l.desc.id && e.locked) {
-                    effects.insert(0, l);
+            let mut keep: Vec<EffectInstance> = self
+                .effects
+                .iter()
+                .filter(|l| self.is_locked(l) && !new.effects.iter().any(|e| e.desc.id == l.desc.id && e.locked))
+                .cloned()
+                .collect();
+            for g in &self.groups {
+                if keep.iter().any(|e| e.group == Some(g.uid)) {
+                    new.groups.push(g.clone());
                 }
             }
+            keep.append(&mut new.effects);
+            new.effects = keep;
         }
-        self.effects = effects;
+        *self = new;
+        self.normalize();
     }
 
     /// Chaos: drop unlocked effects, enable 3 random effects with random params.
@@ -294,15 +525,45 @@ impl Chain {
         }
     }
 
-    /// Enabled effects resolved for this frame.
+    /// Enabled effects resolved for this frame (members of disabled groups are skipped).
     pub fn resolve(&self, t: &FrameTime, inputs: &LiveInputs, midi: &HashMap<(String, u8), f64>) -> Vec<ResolvedEffect> {
-        self.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(t, inputs, midi)).collect()
+        self.effects
+            .iter()
+            .filter(|e| e.enabled)
+            .filter_map(|e| {
+                let group = match e.group.and_then(|g| self.group(g)) {
+                    Some(g) if !g.enabled => return None,
+                    Some(g) => Some(GroupRef { uid: g.uid, isolate: g.isolate, blend: g.blend }),
+                    None => None,
+                };
+                let mut r = e.resolve(t, inputs, midi);
+                r.group = group;
+                Some(r)
+            })
+            .collect()
     }
 }
 
-/// Mask routing for the enabled effect at `index`: the input of the effect directly above.
-pub fn mask_source(index: usize) -> MaskSource {
-    if index == 0 { MaskSource::Blank } else { MaskSource::InputOf(index - 1) }
+/// Mask routing for the resolved effect at `index`: the input of the effect directly
+/// above. A mask right below a group cuts the whole group (the group's input); the first
+/// effect inside a group has nothing above it.
+pub fn mask_source(effects: &[ResolvedEffect], index: usize) -> MaskSource {
+    let gid = |i: usize| effects[i].group.map(|g| g.uid);
+    if index == 0 || index >= effects.len() {
+        return MaskSource::Blank;
+    }
+    let (here, above) = (gid(index), gid(index - 1));
+    if here == above {
+        return MaskSource::InputOf(index - 1);
+    }
+    if here.is_some() {
+        return MaskSource::Blank;
+    }
+    let mut start = index - 1;
+    while start > 0 && gid(start - 1) == above {
+        start -= 1;
+    }
+    MaskSource::GroupInput(start)
 }
 
 #[cfg(test)]
@@ -351,7 +612,92 @@ mod tests {
         let r = c.resolve(&t, &LiveInputs::default(), &HashMap::new());
         assert!((r[0].time - ((t.loop_progress + 0.5) % 1.0) as f32).abs() < 1e-6);
         assert_eq!(r[0].f("distortion"), 1.0);
-        assert_eq!(mask_source(0), MaskSource::Blank);
-        assert_eq!(mask_source(2), MaskSource::InputOf(1));
+    }
+
+    fn ids(c: &Chain) -> Vec<(&str, Option<u64>)> {
+        c.effects.iter().map(|e| (e.desc.id.as_str(), e.group)).collect()
+    }
+
+    #[test]
+    fn groups_stay_contiguous() {
+        let mut c = Chain::default();
+        let a = c.add("bad_tv").unwrap();
+        let b = c.add("pixelate").unwrap();
+        c.add("bulge");
+        let g = c.make_group(a).unwrap();
+        // pixelate joins the group, bulge moves into it from below
+        c.move_into(1, 1, Some(g));
+        c.move_into(2, 1, Some(g));
+        assert_eq!(ids(&c), vec![("bad_tv", Some(g)), ("bulge", Some(g)), ("pixelate", Some(g))]);
+        // dragged away from the group: leaves it
+        let mut d = c.clone();
+        d.add("glow");
+        d.move_to(0, 3);
+        assert_eq!(ids(&d)[3], ("bad_tv", None));
+        // moved within the group: stays
+        c.move_to(0, 1);
+        assert_eq!(ids(&c), vec![("bulge", Some(g)), ("bad_tv", Some(g)), ("pixelate", Some(g))]);
+        // scattered members are gathered at the first one
+        c.add("glow");
+        c.effects.swap(2, 3);
+        c.normalize();
+        assert_eq!(ids(&c), vec![("bulge", Some(g)), ("bad_tv", Some(g)), ("pixelate", Some(g)), ("glow", None)]);
+        assert_eq!(c.group_range(g), Some(0..3));
+        c.move_group(g, false);
+        assert_eq!(c.effects[0].desc.id, "glow");
+        assert_eq!(c.group_range(g), Some(1..4));
+        let g2 = c.duplicate_group(g).unwrap();
+        assert_eq!(c.group_range(g2), Some(4..7));
+        assert_ne!(c.effects[4].uid, c.effects[1].uid);
+        c.shuffle();
+        assert_eq!(c.group_range(g).map(|r| r.len()), Some(3));
+        assert_eq!(c.group_range(g2).map(|r| r.len()), Some(3));
+        c.ungroup(g2);
+        assert_eq!(c.groups.len(), 1);
+        c.remove_group(g);
+        assert_eq!(c.effects.len(), 4);
+        // the last member leaving drops the group
+        let gb = c.make_group(c.effects[0].uid).unwrap();
+        let first = c.effects[0].uid;
+        c.remove(first);
+        assert!(c.group(gb).is_none());
+        let _ = b;
+    }
+
+    #[test]
+    fn locked_groups_survive_chaos_and_disabled_groups_do_not_render() {
+        let mut c = Chain::default();
+        let a = c.add("pixelate").unwrap();
+        c.add("bulge");
+        let g = c.make_group(a).unwrap();
+        c.group_mut(g).unwrap().locked = true;
+        c.chaos();
+        assert_eq!(c.effects[0].uid, a);
+        assert_eq!(c.groups.len(), 1);
+        let t = TimingSettings::default().at_seconds(0.0);
+        let r = c.resolve(&t, &LiveInputs::default(), &HashMap::new());
+        assert_eq!(r[0].group.map(|g| g.uid), Some(g));
+        assert_eq!(r.len(), 4);
+        c.group_mut(g).unwrap().enabled = false;
+        assert_eq!(c.resolve(&t, &LiveInputs::default(), &HashMap::new()).len(), 3);
+    }
+
+    #[test]
+    fn mask_routing_with_groups() {
+        let mut c = Chain::default();
+        for id in ["glow", "pixelate", "mask", "bulge", "mask", "mask"] {
+            c.add(id);
+        }
+        // glow | [pixelate, mask, bulge] | mask | mask
+        let g = c.make_group(c.effects[1].uid).unwrap();
+        c.effects[2].group = Some(g);
+        c.effects[3].group = Some(g);
+        let t = TimingSettings::default().at_seconds(0.0);
+        let r = c.resolve(&t, &LiveInputs::default(), &HashMap::new());
+        assert_eq!(mask_source(&r, 0), MaskSource::Blank);
+        assert_eq!(mask_source(&r, 1), MaskSource::Blank, "first in a group");
+        assert_eq!(mask_source(&r, 2), MaskSource::InputOf(1));
+        assert_eq!(mask_source(&r, 4), MaskSource::GroupInput(1), "right below the group");
+        assert_eq!(mask_source(&r, 5), MaskSource::InputOf(4));
     }
 }

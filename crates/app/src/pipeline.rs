@@ -203,7 +203,7 @@ mod tests {
         let job = ExportJob {
             input: Some(src.clone()),
             playback,
-            effects: chain.effects.clone(),
+            chain: chain.clone(),
             timing,
             width: w,
             height: h,

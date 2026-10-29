@@ -16,7 +16,7 @@ use phthora_core::clock::BpmTap;
 use phthora_core::history::History;
 use phthora_core::params::Value;
 use phthora_core::registry::{self, categories};
-use phthora_core::{Chain, FrameTime, OutputMode, Playback, ResolvedEffect, TimingSettings};
+use phthora_core::{Chain, FrameTime, GroupBlend, OutputMode, Playback, ResolvedEffect, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Target};
 use phthora_media::{Backend, Format, MediaInfo, MediaKind, Quality};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -42,6 +42,18 @@ const LIVE_SIZE: (u32, u32) = (1280, 720);
 
 /// A running export: worker thread, progress, start time.
 type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
+
+/// Group edits from the stack UI, applied after drawing it.
+enum GroupOp {
+    Make(u64),
+    Ungroup(u64),
+    Remove(u64),
+    Duplicate(u64),
+    /// move the group up (true) or down
+    Move(u64, bool),
+    /// effect index dropped on the group header
+    Join(usize, u64),
+}
 
 /// MIDI learn in progress: the parameter, the message count when it began, the start time.
 struct Learn {
@@ -437,7 +449,7 @@ impl PhthoraApp {
         match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| phthora_core::preset::from_json(&s).map_err(|e| e.to_string())) {
             Ok((effects, warnings)) => {
                 self.chain.replace(effects, true);
-                self.history.observe(&self.chain.effects);
+                self.history.observe(&self.chain);
                 self.preset_idx = Some(idx);
                 self.preset_name = store::preset_label(&path);
                 self.engine.reset_history();
@@ -482,7 +494,7 @@ impl PhthoraApp {
             return;
         }
         let path = store::preset_path(&name);
-        let json = phthora_core::preset::to_json(&self.chain.effects);
+        let json = phthora_core::preset::to_json(&self.chain);
         match std::fs::write(&path, json) {
             Ok(()) => {
                 self.rescan_presets();
@@ -499,7 +511,7 @@ impl PhthoraApp {
             self.notify("No preset selected");
             return;
         };
-        match std::fs::write(&path, phthora_core::preset::to_json(&self.chain.effects)) {
+        match std::fs::write(&path, phthora_core::preset::to_json(&self.chain)) {
             Ok(()) => self.notify(format!("Updated preset {}", store::preset_label(&path))),
             Err(e) => self.notify(format!("Cannot save preset: {e}")),
         }
@@ -540,7 +552,7 @@ impl PhthoraApp {
         let job = ExportJob {
             input: self.input_path.clone(),
             playback: self.playback,
-            effects: self.chain.effects.clone(),
+            chain: self.chain.clone(),
             timing,
             width: self.out_size.0,
             height: self.out_size.1,
@@ -870,21 +882,21 @@ impl PhthoraApp {
     }
 
     fn chaos(&mut self) {
-        self.history.observe(&self.chain.effects);
+        self.history.observe(&self.chain);
         self.chain.chaos();
-        self.history.observe(&self.chain.effects);
+        self.history.observe(&self.chain);
         self.engine.reset_history();
     }
 
     fn undo(&mut self) {
-        if let Some(v) = self.history.undo(&self.chain.effects) {
-            self.chain.effects = v;
+        if let Some(v) = self.history.undo(&self.chain) {
+            self.chain = v;
         }
     }
 
     fn redo(&mut self) {
-        if let Some(v) = self.history.redo(&self.chain.effects) {
-            self.chain.effects = v;
+        if let Some(v) = self.history.redo(&self.chain) {
+            self.chain = v;
         }
     }
 
@@ -1025,6 +1037,9 @@ impl PhthoraApp {
         let mut remove = None;
         let mut duplicate = None;
         let mut moved: Option<(usize, usize)> = None;
+        // (from, to, group to join)
+        let mut moved_into: Option<(usize, usize, Option<u64>)> = None;
+        let mut group_op: Option<GroupOp> = None;
         let n = self.chain.effects.len();
         let mode = self.timing.mode;
         let playhead = self.last_ft.export_progress;
@@ -1037,14 +1052,44 @@ impl PhthoraApp {
             ui.label(egui::RichText::new("No effects. Add one from the list on the left, or press Chaos.").weak());
         }
         for i in 0..n {
+            let gid = self.chain.effects[i].group;
+            if let Some(g) = gid
+                && (i == 0 || self.chain.effects[i - 1].group != Some(g)) {
+                    let units = self.chain.units();
+                    let k = units.iter().position(|u| u.start == i).unwrap_or(0);
+                    if let Some(op) = self.group_header(ui, g, k == 0, k + 1 == units.len()) {
+                        group_op = Some(op);
+                    }
+                }
+            if gid.is_some_and(|g| self.chain.group(g).is_some_and(|g| !g.expanded)) {
+                continue;
+            }
+            let group_end = gid.and_then(|g| self.chain.group_range(g)).map(|r| r.end);
             let e = &mut self.chain.effects[i];
             let uid = e.uid;
-            let frame = egui::Frame::group(ui.style()).inner_margin(egui::Margin::symmetric(6, 4)).fill(if e.enabled { Color32::from_gray(34) } else { Color32::from_gray(26) });
+            let indent = if gid.is_some() { 14 } else { 0 };
+            let frame = egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .outer_margin(egui::Margin { left: indent, ..Default::default() })
+                .fill(if e.enabled { Color32::from_gray(34) } else { Color32::from_gray(26) });
             let resp = frame
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let handle = ui.add(egui::Label::new("☰").sense(Sense::drag())).on_hover_text("Drag to reorder");
+                        let handle = ui.add(egui::Label::new("☰").sense(Sense::click_and_drag())).on_hover_text("Drag to reorder, right click for groups");
                         handle.dnd_set_drag_payload(i);
+                        let group_menu = |ui: &mut egui::Ui, moved_into: &mut Option<(usize, usize, Option<u64>)>, group_op: &mut Option<GroupOp>| match group_end {
+                            Some(end) => {
+                                if ui.button("Take out of the group").clicked() {
+                                    *moved_into = Some((i, end - 1, None));
+                                }
+                            }
+                            None => {
+                                if ui.button("Put into a new group").clicked() {
+                                    *group_op = Some(GroupOp::Make(uid));
+                                }
+                            }
+                        };
+                        handle.context_menu(|ui| group_menu(ui, &mut moved_into, &mut group_op));
                         ui.checkbox(&mut e.enabled, "");
                         let arrow = if e.expanded { "▼" } else { "▶" };
                         if ui.small_button(arrow).clicked() {
@@ -1063,13 +1108,14 @@ impl PhthoraApp {
                             }
                             _ => {
                                 let name = egui::RichText::new(e.name().to_string()).strong();
-                                let r = ui.add(egui::Label::new(name).sense(Sense::click())).on_hover_text("Double click to rename");
+                                let r = ui.add(egui::Label::new(name).sense(Sense::click())).on_hover_text("Double click to rename, right click for groups");
                                 if r.double_clicked() {
                                     self.renaming = Some((uid, e.name().to_string()));
                                 }
                                 if r.clicked() {
                                     e.expanded = !e.expanded;
                                 }
+                                r.context_menu(|ui| group_menu(ui, &mut moved_into, &mut group_op));
                             }
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1112,7 +1158,8 @@ impl PhthoraApp {
                 })
                 .response;
             if let Some(from) = resp.dnd_release_payload::<usize>() {
-                moved = Some((*from, i));
+                // dropped on an effect: take its place and its group
+                moved_into = Some((*from, i, gid));
             }
             if resp.dnd_hover_payload::<usize>().is_some() {
                 ui.painter().hline(resp.rect.x_range(), resp.rect.top(), egui::Stroke::new(2.0, Color32::from_rgb(120, 220, 160)));
@@ -1131,7 +1178,110 @@ impl PhthoraApp {
             && a != b {
                 self.chain.move_to(a, b);
             }
+        if let Some((from, to, g)) = moved_into {
+            self.chain.move_into(from, to, g);
+        }
+        match group_op {
+            Some(GroupOp::Make(uid)) => {
+                self.chain.make_group(uid);
+            }
+            Some(GroupOp::Ungroup(g)) => self.chain.ungroup(g),
+            Some(GroupOp::Remove(g)) => self.chain.remove_group(g),
+            Some(GroupOp::Duplicate(g)) => {
+                self.chain.duplicate_group(g);
+            }
+            Some(GroupOp::Move(g, up)) => self.chain.move_group(g, up),
+            Some(GroupOp::Join(from, g)) => {
+                if let Some(r) = self.chain.group_range(g) {
+                    let to = if from < r.start { r.start - 1 } else { r.start };
+                    self.chain.move_into(from, to, Some(g));
+                }
+            }
+            None => {}
+        }
         actions
+    }
+
+    /// Header row of a group: switches, blend mode and group actions. Effects dropped on it
+    /// join the group.
+    fn group_header(&mut self, ui: &mut egui::Ui, gid: u64, first: bool, last: bool) -> Option<GroupOp> {
+        let mut op = None;
+        let renaming = &mut self.renaming;
+        let g = self.chain.groups.iter_mut().find(|g| g.uid == gid)?;
+        let frame = egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .fill(if g.enabled { Color32::from_rgb(34, 44, 52) } else { Color32::from_gray(26) });
+        let resp = frame
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut g.enabled, "").on_hover_text("Group on / off");
+                    if ui.small_button(if g.expanded { "▼" } else { "▶" }).clicked() {
+                        g.expanded = !g.expanded;
+                    }
+                    match renaming {
+                        Some((ruid, buf)) if *ruid == gid => {
+                            let r = ui.add(egui::TextEdit::singleline(buf).desired_width(110.0));
+                            if r.lost_focus() {
+                                let s = buf.trim().to_string();
+                                if !s.is_empty() {
+                                    g.name = s;
+                                }
+                                *renaming = None;
+                            } else {
+                                r.request_focus();
+                            }
+                        }
+                        _ => {
+                            let r = ui.add(egui::Label::new(egui::RichText::new(&g.name).strong()).sense(Sense::click())).on_hover_text("Double click to rename");
+                            if r.double_clicked() {
+                                *renaming = Some((gid, g.name.clone()));
+                            } else if r.clicked() {
+                                g.expanded = !g.expanded;
+                            }
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✕").on_hover_text("Remove the group and its effects").clicked() {
+                            op = Some(GroupOp::Remove(gid));
+                        }
+                        if ui.small_button("⧉").on_hover_text("Duplicate the group").clicked() {
+                            op = Some(GroupOp::Duplicate(gid));
+                        }
+                        if ui.small_button("⊟").on_hover_text("Ungroup: keep the effects").clicked() {
+                            op = Some(GroupOp::Ungroup(gid));
+                        }
+                        let lock = if g.locked { "🔒" } else { "🔓" };
+                        if ui.small_button(lock).on_hover_text("Lock: the group is kept by Chaos and preset loading").clicked() {
+                            g.locked = !g.locked;
+                        }
+                        if !last && ui.small_button("⏷").clicked() {
+                            op = Some(GroupOp::Move(gid, false));
+                        }
+                        if !first && ui.small_button("⏶").clicked() {
+                            op = Some(GroupOp::Move(gid, true));
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.toggle_value(&mut g.isolate, "Isolate").on_hover_text("Effects in the group start from a transparent image instead of the image below");
+                    egui::ComboBox::from_id_salt(("blend", gid)).selected_text(g.blend.label()).width(80.0).show_ui(ui, |ui| {
+                        for b in GroupBlend::ALL {
+                            ui.selectable_value(&mut g.blend, b, b.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("Normal: the group's result\nMask: the group's shape cuts out the image below\nBehind: the group goes behind the image");
+                });
+            })
+            .response;
+        if let Some(from) = resp.dnd_release_payload::<usize>() {
+            op = Some(GroupOp::Join(*from, gid));
+        }
+        if resp.dnd_hover_payload::<usize>().is_some() {
+            ui.painter().rect_stroke(resp.rect, 3.0, egui::Stroke::new(2.0, Color32::from_rgb(120, 220, 160)), egui::StrokeKind::Inside);
+        }
+        op
     }
 
     fn effect_list(&mut self, ui: &mut egui::Ui) {
@@ -1601,7 +1751,7 @@ impl eframe::App for PhthoraApp {
         self.audio.window(&ctx, input_audio);
         // an edit is complete once the pointer is released and no text field has focus
         if !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input() {
-            self.history.observe(&self.chain.effects);
+            self.history.observe(&self.chain);
         }
         // keep animating at the output frame rate
         if self.audio.loading() || self.learning.is_some() {

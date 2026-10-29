@@ -180,19 +180,19 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         ("auto", _) => if phthora_media::vaapi_available() { Backend::Vaapi } else { Backend::Software },
         (b, _) => return Err(format!("unknown backend {b}")),
     };
-    let mut effects = Vec::new();
+    let mut chain = phthora_core::Chain::default();
     if let Some(p) = &preset {
         let s = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         let (fx, warnings) = phthora_core::preset::from_json(&s).map_err(|e| e.to_string())?;
         for w in warnings {
             eprintln!("preset: {w}");
         }
-        effects.extend(fx);
+        chain = fx;
     }
     for id in &effects_arg {
         let mut e = EffectInstance::by_id(id).filter(|e| e.desc.available()).ok_or_else(|| format!("unknown effect {id} (see --list)"))?;
         e.enabled = true;
-        effects.push(e);
+        chain.effects.push(e);
     }
     let info = match &input {
         Some(p) => Some(phthora_media::probe(p).map_err(|e| e.to_string())?),
@@ -228,7 +228,7 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         }
         None => None,
     };
-    let job = render::ExportJob { input, playback, effects, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, midi: Default::default(), out };
+    let job = render::ExportJob { input, playback, chain, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, midi: Default::default(), out };
     let ctx = phthora_gpu::GpuContext::headless()?;
     let progress = render::Progress::default();
     let t0 = std::time::Instant::now();

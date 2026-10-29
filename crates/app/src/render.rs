@@ -3,7 +3,7 @@
 use crate::pipeline::InputVideo;
 use phthora_audio::{AudioSettings, AudioTrack, FrameLevels, MidiValues};
 use phthora_core::modulator::LiveInputs;
-use phthora_core::{EffectInstance, OutputMode, Playback, TimingSettings};
+use phthora_core::{Chain, OutputMode, Playback, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Readback};
 use phthora_media::{AudioSource, Backend, EncodeSettings, Encoder, Format, MediaKind, Quality};
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub struct ExportJob {
     pub input: Option<PathBuf>,
     pub playback: Playback,
-    pub effects: Vec<EffectInstance>,
+    pub chain: Chain,
     pub timing: TimingSettings,
     pub width: u32,
     pub height: u32,
@@ -105,7 +105,7 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
             live.audio[k] = *v;
         }
         engine.audio_spectrum.clone_from(&lv.spectrum);
-        let resolved: Vec<_> = job.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(&ft, &live, &job.midi)).collect();
+        let resolved = job.chain.resolve(&ft, &live, &job.midi);
         engine.render(&resolved, &ft);
         if let Some(px) = readback.push(engine.output(), engine.blank()) {
             emit(px, &mut done)?;
