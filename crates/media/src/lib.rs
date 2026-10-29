@@ -4,6 +4,7 @@
 //! - [`load_image`]: still image to RGBA
 //! - [`Decoder`]: streaming frames from video/GIF (preview and export)
 //! - [`Encoder`]: frames to MP4 / WebM / GIF / PNG, optional audio mux
+//! - [`LiveSource`] / [`VirtualCam`]: cameras in, virtual camera out (V4L2)
 
 mod audio;
 mod clip;
@@ -11,6 +12,7 @@ mod decoder;
 mod encoder;
 mod error;
 mod image;
+mod live;
 mod name;
 mod probe;
 mod size;
@@ -22,6 +24,7 @@ pub use decoder::{DecodeOptions, Decoder, Frame};
 pub use encoder::{AudioSource, Backend, EncodeSettings, Encoder, Format, Quality, vaapi_available};
 pub use error::{MediaError, Result};
 pub use image::{RgbaImage, load_image};
+pub use live::{LiveSource, Record, VideoDevice, VirtualCam, list_devices};
 pub use name::{default_export_name, export_name_at};
 pub use probe::{MediaInfo, MediaKind, count_frames, probe};
 pub use size::fit_size;
