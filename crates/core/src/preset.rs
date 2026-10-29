@@ -53,7 +53,8 @@ pub fn to_preset(effects: &[EffectInstance]) -> PresetFile {
                 expanded: e.expanded,
                 seed: e.seed,
                 params: e.values.iter().map(|(k, v)| (k.clone(), v.to_json())).collect(),
-                modulators: e.modulators.iter().filter(|(_, m)| m.enabled).map(|(k, m)| (k.clone(), m.clone())).collect(),
+                // disabled modulators keep their settings, like in the editor
+                modulators: e.modulators.clone(),
                 data: e.data.clone(),
             })
             .collect(),
@@ -65,7 +66,7 @@ pub fn from_preset(p: &PresetFile) -> (Vec<EffectInstance>, Vec<String>) {
     let mut out = Vec::new();
     let mut warn = Vec::new();
     for pe in &p.effects {
-        let Some(desc) = registry::find(&pe.effect) else {
+        let Some(desc) = registry::find(&pe.effect).filter(|d| d.available()) else {
             warn.push(format!("unknown effect '{}'", pe.effect));
             continue;
         };
@@ -83,7 +84,7 @@ pub fn from_preset(p: &PresetFile) -> (Vec<EffectInstance>, Vec<String>) {
                 None => warn.push(format!("{}: ignored param '{}'", desc.name, k)),
             }
         }
-        e.modulators = pe.modulators.clone();
+        e.modulators = pe.modulators.iter().filter(|(k, _)| desc.param(k).is_some_and(|p| p.is_float())).map(|(k, m)| (k.clone(), m.clone())).collect();
         e.data = pe.data.clone();
         out.push(e);
     }
@@ -119,5 +120,25 @@ mod tests {
         assert_eq!(back[0].values, c.effects[0].values);
         assert_eq!(back[0].seed, c.effects[0].seed);
         assert_eq!(back[0].modulators, c.effects[0].modulators);
+    }
+
+    #[test]
+    fn missing_fields_are_deterministic() {
+        let s = r#"{"version":1,"effects":[{"effect":"rgb_shift","modulators":{"amount":{"enabled":false,"shape":"noise"}}}]}"#;
+        let (a, _) = from_json(s).unwrap();
+        let (b, _) = from_json(s).unwrap();
+        assert_eq!(a[0].seed, b[0].seed);
+        assert_eq!(a[0].modulators["amount"].seed, b[0].modulators["amount"].seed);
+        // disabled modulators survive a save
+        let (c, _) = from_json(&to_json(&a)).unwrap();
+        assert_eq!(c[0].modulators["amount"].shape, crate::modulator::Shape::Noise);
+    }
+
+    #[test]
+    fn unavailable_effects_are_skipped() {
+        let s = r#"{"version":1,"effects":[{"effect":"definitely_not_an_effect"},{"effect":"pixelate"}]}"#;
+        let (fx, warn) = from_json(s).unwrap();
+        assert_eq!(fx.len(), 1);
+        assert_eq!(warn.len(), 1);
     }
 }

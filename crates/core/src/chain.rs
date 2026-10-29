@@ -168,6 +168,19 @@ pub struct ResolvedEffect {
     pub triggers: BTreeMap<String, u64>,
 }
 
+/// Same effect with the same values for this frame: rendering it again gives the same image.
+impl PartialEq for ResolvedEffect {
+    fn eq(&self, o: &Self) -> bool {
+        self.uid == o.uid
+            && self.desc.id == o.desc.id
+            && self.values == o.values
+            && self.time == o.time
+            && self.seed == o.seed
+            && self.data == o.data
+            && self.triggers == o.triggers
+    }
+}
+
 impl ResolvedEffect {
     pub fn f(&self, key: &str) -> f32 {
         self.values.get(key).map(|v| v.as_f32()).unwrap_or(0.0)
@@ -183,7 +196,6 @@ impl ResolvedEffect {
 #[derive(Clone, Debug, Default)]
 pub struct Chain {
     pub effects: Vec<EffectInstance>,
-    undo: Vec<Vec<EffectInstance>>,
 }
 
 /// Which texture a mask effect uses as the "un-effected" image.
@@ -248,23 +260,6 @@ impl Chain {
         self.effects.shuffle(&mut rand::rng());
     }
 
-    fn push_undo(&mut self) {
-        self.undo.push(self.effects.clone());
-        if self.undo.len() > 10 {
-            self.undo.remove(0);
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-
-    pub fn undo(&mut self) {
-        if let Some(prev) = self.undo.pop() {
-            self.effects = prev;
-        }
-    }
-
     /// Replace the stack (keeps locked effects that are not in the new set).
     pub fn replace(&mut self, mut effects: Vec<EffectInstance>, keep_locked: bool) {
         if keep_locked {
@@ -278,14 +273,13 @@ impl Chain {
         self.effects = effects;
     }
 
-    /// Chaos: drop unlocked effects, enable 3 random effects with random params (undoable).
+    /// Chaos: drop unlocked effects, enable 3 random effects with random params.
     pub fn chaos(&mut self) {
-        self.push_undo();
         let mut rng = rand::rng();
         self.clear_unlocked();
         let mut pool: Vec<&'static EffectDesc> = registry::registry()
             .iter()
-            .filter(|d| d.randomizable && !self.effects.iter().any(|e| e.desc.id == d.id))
+            .filter(|d| d.randomizable && d.available() && !self.effects.iter().any(|e| e.desc.id == d.id))
             .collect();
         pool.shuffle(&mut rng);
         let mut picked: Vec<&'static EffectDesc> = pool.into_iter().take(3).collect();
@@ -331,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn chaos_and_undo() {
+    fn chaos_keeps_locked() {
         let mut c = Chain::default();
         c.add("pixelate");
         c.effects[0].locked = true;
@@ -339,9 +333,7 @@ mod tests {
         c.chaos();
         assert_eq!(c.effects.len(), 4);
         assert_eq!(c.effects[0].desc.id, "pixelate");
-        c.undo();
-        assert_eq!(c.effects.len(), 2);
-        assert_eq!(c.effects[1].desc.id, "bulge");
+        assert!(c.effects.iter().all(|e| e.desc.available()));
     }
 
     #[test]

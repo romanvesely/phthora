@@ -66,6 +66,8 @@ pub struct Modulator {
     pub chance: f64,
     pub start: f64,
     pub end: f64,
+    /// missing in a hand-written preset: 0, so loading stays deterministic
+    #[serde(default)]
     pub seed: f64,
     pub band: Band,
     pub midi_cc: Option<u8>,
