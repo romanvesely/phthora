@@ -41,14 +41,66 @@ impl Shape {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// Audio band a modulator follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Band {
     #[default]
     All,
     Low,
     Mid,
     Hi,
+    /// user band n (0-based) from the audio settings
+    Custom(u8),
+}
+
+/// Built-in bands plus user bands.
+pub const MAX_BANDS: usize = 8;
+
+impl Band {
+    pub const BUILTIN: [Band; 4] = [Band::All, Band::Low, Band::Mid, Band::Hi];
+
+    pub fn index(self) -> usize {
+        match self {
+            Band::All => 0,
+            Band::Low => 1,
+            Band::Mid => 2,
+            Band::Hi => 3,
+            Band::Custom(n) => (4 + n as usize).min(MAX_BANDS - 1),
+        }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            Band::All => "all".into(),
+            Band::Low => "low".into(),
+            Band::Mid => "mid".into(),
+            Band::Hi => "hi".into(),
+            Band::Custom(n) => format!("custom{}", n as u32 + 1),
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Band> {
+        Some(match s {
+            "all" => Band::All,
+            "low" => Band::Low,
+            "mid" => Band::Mid,
+            "hi" => Band::Hi,
+            _ => Band::Custom(s.strip_prefix("custom")?.parse::<u8>().ok()?.checked_sub(1)?),
+        })
+    }
+}
+
+impl Serialize for Band {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Band {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Band::parse(&s).unwrap_or_default())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,8 +152,8 @@ impl Default for Modulator {
 /// External live inputs a modulator may read.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LiveInputs {
-    /// audio band levels 0..1 (all, low, mid, hi)
-    pub audio: [f32; 4],
+    /// audio band levels 0..1 (all, low, mid, hi, user bands)
+    pub audio: [f32; MAX_BANDS],
     /// true when there is no meaningful duration (webcam/mic live): start/end disabled
     pub live: bool,
 }
@@ -127,7 +179,7 @@ impl Modulator {
             Shape::Step => tm.round(),
             Shape::Rand => random1d((t.export_duration * t.export_progress * self.speed * 4.0).floor() + self.seed),
             Shape::Noise => loop_noise1d(t.export_progress, self.speed * t.export_duration / 16.0, self.seed) / 2.0 + 0.5,
-            Shape::Audio => inputs.audio[self.band as usize] as f64,
+            Shape::Audio => inputs.audio[self.band.index()] as f64,
             Shape::Const => self.max,
             Shape::Midi | Shape::Keys => unreachable!(),
         };
@@ -203,6 +255,21 @@ mod tests {
         // mapping to param range + rounding
         let v = m(Shape::Linear).eval(&t, &li, None, 0.0, 10.0, 1.0).unwrap();
         assert_eq!(v, 5.0);
+    }
+
+    #[test]
+    fn bands() {
+        for b in [Band::All, Band::Hi, Band::Custom(0), Band::Custom(3)] {
+            assert_eq!(Band::parse(&b.name()), Some(b));
+            let j = serde_json::to_string(&b).unwrap();
+            assert_eq!(serde_json::from_str::<Band>(&j).unwrap(), b);
+        }
+        assert_eq!(serde_json::from_str::<Band>("\"nonsense\"").unwrap(), Band::All);
+        let mut li = LiveInputs::default();
+        li.audio[5] = 0.75;
+        let m = Modulator { shape: Shape::Audio, band: Band::Custom(1), ..m(Shape::Audio) };
+        let ts = TimingSettings::default();
+        assert!((m.eval_normalized(&ts.at_seconds(0.1), &li, None).unwrap() - 0.75).abs() < 1e-6);
     }
 
     #[test]
