@@ -5,6 +5,7 @@ use crate::context::{GpuContext, SamplerKind, Target, FORMAT};
 use crate::shader::{pack_uniforms, reflect, run_pass, Blend, CompiledShader, ShaderLibrary, TexInput, UVal, UniformBuf, UniformLayout};
 use glam::{Mat4, Vec3};
 use phthora_core::{EffectDesc, OutputMode, ResolvedEffect};
+use std::collections::HashMap;
 use std::rc::Rc;
 use wgpu::util::DeviceExt;
 
@@ -500,7 +501,24 @@ struct GeoPipeline {
     samp_binding: u32,
 }
 
+/// Entry points and vertex input of a geometry pipeline.
+struct GeoSpec<'a> {
+    src: &'a str,
+    label: &'a str,
+    topology: wgpu::PrimitiveTopology,
+    blend: wgpu::BlendState,
+    vs: &'a str,
+    fs: &'a str,
+    /// position + uv vertex buffer; without one the vertex shader generates its positions
+    vertex_buffer: bool,
+}
+
 fn geo_pipeline(ctx: &GpuContext, src: &str, label: &str, topology: wgpu::PrimitiveTopology, blend: wgpu::BlendState) -> GeoPipeline {
+    geo_pipeline_with(ctx, &GeoSpec { src, label, topology, blend, vs: "vs_main", fs: "fs_main", vertex_buffer: true })
+}
+
+fn geo_pipeline_with(ctx: &GpuContext, spec: &GeoSpec) -> GeoPipeline {
+    let GeoSpec { src, label, topology, blend, .. } = *spec;
     let (uniform, textures) = reflect(src).expect("geometry shader");
     let layout = uniform.expect("uniform block");
     let t = &textures[0];
@@ -536,18 +554,19 @@ fn geo_pipeline(ctx: &GpuContext, src: &str, label: &str, topology: wgpu::Primit
     let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
     let module = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
     let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+    let buffers = [Some(wgpu::VertexBufferLayout { array_stride: 20, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })];
     let pipeline = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(&pl),
         vertex: wgpu::VertexState {
             module: &module,
-            entry_point: Some("vs_main"),
-            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 20, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
+            entry_point: Some(spec.vs),
+            buffers: if spec.vertex_buffer { &buffers } else { &[] },
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fs_main"),
+            entry_point: Some(spec.fs),
             targets: &[Some(wgpu::ColorTargetState { format: FORMAT, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
             compilation_options: Default::default(),
         }),
@@ -577,6 +596,12 @@ const NORMAL_BLEND: wgpu::BlendState = wgpu::BlendState {
 const ADDITIVE_BLEND: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
     alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+};
+
+/// Screen for premultiplied colors: 1 - (1 - src) * (1 - dst).
+const SCREEN_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrc, operation: wgpu::BlendOperation::Add },
+    alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
 };
 
 fn write_mat(buf: &mut [u8], layout: &UniformLayout, key: &str, m: &Mat4) {
@@ -674,22 +699,103 @@ impl GpuEffect for Plane3d {
     }
 }
 
-/// Luma Mesh: a displaced 120x120 grid, drawn filled and as additive wireframe.
+const LUMA_SRC: &str = include_str!("../../wgsl/luma_mesh.wgsl");
+const LUMA_SEGS: u32 = 120;
+/// Geometries kept per resolution before the cache is dropped.
+const LUMA_CACHE: usize = 3;
+/// Extra edge softness of a line at `lineBlur` = 1, in output pixels.
+const LINE_BLUR_PX: f32 = 32.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LumaMode {
+    Mesh,
+    Lines,
+    Points,
+}
+
+impl LumaMode {
+    fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "lines" => Self::Lines,
+            "points" => Self::Points,
+            _ => Self::Mesh,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LumaBlend {
+    Normal,
+    Additive,
+    Screen,
+}
+
+impl LumaBlend {
+    fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "additive" => Self::Additive,
+            "screen" => Self::Screen,
+            _ => Self::Normal,
+        }
+    }
+
+    fn state(self) -> wgpu::BlendState {
+        match self {
+            Self::Normal => NORMAL_BLEND,
+            Self::Additive => ADDITIVE_BLEND,
+            Self::Screen => SCREEN_BLEND,
+        }
+    }
+}
+
+/// Luma Mesh: a displaced grid, drawn filled and as additive wireframe, as lines or as points.
 struct LumaMesh {
     mesh_pipe: GeoPipeline,
     grid_pipe: GeoPipeline,
-    mesh: Mesh,
+    /// line and point pipelines by (points, blend), built on first use
+    strip_pipes: HashMap<(bool, LumaBlend), GeoPipeline>,
+    /// filled mesh + wireframe by segments per side
+    meshes: HashMap<u32, Mesh>,
     ubuf_mesh: UniformBuf,
     ubuf_grid: UniformBuf,
 }
 
 impl LumaMesh {
     fn new(ctx: &GpuContext) -> Self {
-        let src = include_str!("../../wgsl/luma_mesh.wgsl");
-        let mesh_pipe = geo_pipeline(ctx, src, "luma-mesh", wgpu::PrimitiveTopology::TriangleList, NORMAL_BLEND);
-        let grid_pipe = geo_pipeline(ctx, src, "luma-grid", wgpu::PrimitiveTopology::LineList, ADDITIVE_BLEND);
+        let mesh_pipe = geo_pipeline(ctx, LUMA_SRC, "luma-mesh", wgpu::PrimitiveTopology::TriangleList, NORMAL_BLEND);
+        let grid_pipe = geo_pipeline(ctx, LUMA_SRC, "luma-grid", wgpu::PrimitiveTopology::LineList, ADDITIVE_BLEND);
         let size = mesh_pipe.layout.size;
-        Self { mesh_pipe, grid_pipe, mesh: Mesh::new(ctx, 120, true), ubuf_mesh: UniformBuf::new(ctx, size), ubuf_grid: UniformBuf::new(ctx, size) }
+        Self {
+            mesh_pipe,
+            grid_pipe,
+            strip_pipes: HashMap::new(),
+            meshes: HashMap::new(),
+            ubuf_mesh: UniformBuf::new(ctx, size),
+            ubuf_grid: UniformBuf::new(ctx, size),
+        }
+    }
+
+    /// Segments per side from the `resolution` param (a preset without it gets the original grid).
+    fn segments(e: &ResolvedEffect) -> u32 {
+        let r = e.f("resolution");
+        if r < 1.0 { LUMA_SEGS } else { (r.round() as u32).clamp(20, 400) }
+    }
+
+    fn ensure_mesh(&mut self, ctx: &GpuContext, segs: u32) {
+        if !self.meshes.contains_key(&segs) {
+            if self.meshes.len() >= LUMA_CACHE {
+                self.meshes.clear();
+            }
+            self.meshes.insert(segs, Mesh::new(ctx, segs, true));
+        }
+    }
+
+    fn strip_pipe(&mut self, ctx: &GpuContext, points: bool, blend: LumaBlend) -> &GeoPipeline {
+        self.strip_pipes.entry((points, blend)).or_insert_with(|| {
+            let (vs, fs, label) = if points { ("vs_point", "fs_point", "luma-points") } else { ("vs_line", "fs_line", "luma-lines") };
+            let spec = GeoSpec { src: LUMA_SRC, label, topology: wgpu::PrimitiveTopology::TriangleStrip, blend: blend.state(), vs, fs, vertex_buffer: false };
+            geo_pipeline_with(ctx, &spec)
+        })
     }
 }
 
@@ -705,36 +811,66 @@ impl GpuEffect for LumaMesh {
         let model = euler_xyz(rx, ry, rz) * Mat4::from_scale(Vec3::new(aspect, 1.0, 1.0));
         let mv = view_for(e) * model;
         let proj = projection(aspect);
-        let layout = &self.mesh_pipe.layout;
+        let mode = LumaMode::parse(e.s("mode"));
+        let blend = LumaBlend::parse(e.s("blend"));
+        let segs = Self::segments(e);
+        let lines = e.f("lineCount").round().clamp(2.0, 400.0);
+        let layout = self.mesh_pipe.layout.clone();
         let pack = |opacity: f32, wire: bool| {
-            let (mut d, _) = pack_uniforms(layout, &|k| match k {
+            let (mut d, _) = pack_uniforms(&layout, &|k| match k {
                 "opacity" => Some(UVal::F(opacity)),
                 "b_wireframe" => Some(UVal::F(wire as i32 as f32)),
                 "time" => Some(UVal::F(e.time)),
                 "seed" => Some(UVal::F(e.f("seed"))),
                 "bandsScl" => Some(UVal::F(0.4)),
                 "warpScale" => Some(UVal::F(2.0)),
+                "viewport" => Some(UVal::V2([rc.width as f32, rc.height as f32])),
+                "segs" => Some(UVal::F(segs as f32)),
+                "lineCount" => Some(UVal::F(lines)),
+                "lineWidth" => Some(UVal::F(e.f("lineThickness").max(0.0))),
+                "lineSoft" => Some(UVal::F(1.0 + e.f("lineBlur").clamp(0.0, 1.0) * LINE_BLUR_PX)),
+                "pointSize" => Some(UVal::F(e.f("pointSize").max(0.0))),
+                "b_premul" => Some(UVal::F((blend == LumaBlend::Screen) as i32 as f32)),
                 _ => base_uniform(e, rc, k),
             });
-            write_mat(&mut d, layout, "modelViewMatrix", &mv);
-            write_mat(&mut d, layout, "projectionMatrix", &proj);
+            write_mat(&mut d, &layout, "modelViewMatrix", &mv);
+            write_mat(&mut d, &layout, "projectionMatrix", &proj);
             d
         };
-        self.ubuf_mesh.write(rc.ctx, &pack(e.f("meshOpacity"), false));
-        self.ubuf_grid.write(rc.ctx, &pack(e.f("gridOpacity"), true));
-        let bg_mesh = geo_bind_group(rc.ctx, &self.mesh_pipe, &self.ubuf_mesh.buf, &input.view);
-        let bg_grid = geo_bind_group(rc.ctx, &self.grid_pipe, &self.ubuf_grid.buf, &input.view);
+        if mode == LumaMode::Mesh {
+            self.ensure_mesh(rc.ctx, segs);
+            self.ubuf_mesh.write(rc.ctx, &pack(e.f("meshOpacity"), false));
+            self.ubuf_grid.write(rc.ctx, &pack(e.f("gridOpacity"), true));
+            let bg_mesh = geo_bind_group(rc.ctx, &self.mesh_pipe, &self.ubuf_mesh.buf, &input.view);
+            let bg_grid = geo_bind_group(rc.ctx, &self.grid_pipe, &self.ubuf_grid.buf, &input.view);
+            let mesh = &self.meshes[&segs];
+            let mut rp = begin(rc.enc, out, rc.clear);
+            rp.set_vertex_buffer(0, mesh.vbuf.slice(..));
+            rp.set_pipeline(&self.mesh_pipe.pipeline);
+            rp.set_bind_group(0, &bg_mesh, &[]);
+            rp.set_index_buffer(mesh.tris.slice(..), wgpu::IndexFormat::Uint32);
+            rp.draw_indexed(0..mesh.tri_count, 0, 0..1);
+            if let Some((wire, count)) = &mesh.lines {
+                rp.set_pipeline(&self.grid_pipe.pipeline);
+                rp.set_bind_group(0, &bg_grid, &[]);
+                rp.set_index_buffer(wire.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..*count, 0, 0..1);
+            }
+            return;
+        }
+        // lines and points are single draws: one uniform buffer is enough
+        let points = mode == LumaMode::Points;
+        self.ubuf_mesh.write(rc.ctx, &pack(e.f("lineOpacity"), false));
+        self.strip_pipe(rc.ctx, points, blend);
+        let pipe = &self.strip_pipes[&(points, blend)];
+        let bg = geo_bind_group(rc.ctx, pipe, &self.ubuf_mesh.buf, &input.view);
         let mut rp = begin(rc.enc, out, rc.clear);
-        rp.set_vertex_buffer(0, self.mesh.vbuf.slice(..));
-        rp.set_pipeline(&self.mesh_pipe.pipeline);
-        rp.set_bind_group(0, &bg_mesh, &[]);
-        rp.set_index_buffer(self.mesh.tris.slice(..), wgpu::IndexFormat::Uint32);
-        rp.draw_indexed(0..self.mesh.tri_count, 0, 0..1);
-        if let Some((lines, count)) = &self.mesh.lines {
-            rp.set_pipeline(&self.grid_pipe.pipeline);
-            rp.set_bind_group(0, &bg_grid, &[]);
-            rp.set_index_buffer(lines.slice(..), wgpu::IndexFormat::Uint32);
-            rp.draw_indexed(0..*count, 0, 0..1);
+        rp.set_pipeline(&pipe.pipeline);
+        rp.set_bind_group(0, &bg, &[]);
+        if points {
+            rp.draw(0..4, 0..(segs + 1) * (segs + 1));
+        } else {
+            rp.draw(0..2 * (segs + 1), 0..lines as u32);
         }
     }
 }
@@ -746,6 +882,14 @@ mod tests {
     #[test]
     fn pyramid_sizes() {
         assert_eq!(pyramid(1920, 1080), vec![(960, 540), (480, 270), (240, 135), (120, 68)]);
+    }
+
+    #[test]
+    fn luma_params_parse() {
+        assert!(LumaMode::parse("Lines") == LumaMode::Lines && LumaMode::parse("points") == LumaMode::Points);
+        // unknown or missing values keep the original mesh and blending
+        assert!(LumaMode::parse("") == LumaMode::Mesh && LumaBlend::parse("") == LumaBlend::Normal);
+        assert!(LumaBlend::parse("Screen") == LumaBlend::Screen && LumaBlend::parse("additive") == LumaBlend::Additive);
     }
 
     #[test]

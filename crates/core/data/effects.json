@@ -166,6 +166,33 @@
   "time": true,
   "params": [
    {
+    "key": "mode",
+    "label": "Mode",
+    "type": "combo",
+    "values": ["Mesh", "Lines", "Points"],
+    "default": "Mesh",
+    "no_random": true
+   },
+   {
+    "key": "resolution",
+    "label": "Resolution",
+    "type": "float",
+    "min": 20,
+    "max": 400,
+    "step": 1,
+    "default": 120,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "blend",
+    "label": "Blend",
+    "type": "combo",
+    "values": ["Normal", "Additive", "Screen"],
+    "default": "Normal",
+    "no_random": true
+   },
+   {
     "key": "meshOpacity",
     "label": "Mesh Opacity",
     "type": "float",
@@ -252,6 +279,56 @@
     "label": "Mouse Controls",
     "type": "bool",
     "default": false
+   },
+   {
+    "key": "lineOpacity",
+    "label": "Line Opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "lineCount",
+    "label": "Line Count",
+    "type": "float",
+    "min": 2,
+    "max": 400,
+    "step": 1,
+    "default": 60,
+    "rand": "low"
+   },
+   {
+    "key": "lineThickness",
+    "label": "Line Thickness",
+    "type": "float",
+    "min": 0.5,
+    "max": 32,
+    "step": 0.5,
+    "default": 2,
+    "rand": "low"
+   },
+   {
+    "key": "lineBlur",
+    "label": "Line Blur",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "low"
+   },
+   {
+    "key": "pointSize",
+    "label": "Point Size",
+    "type": "float",
+    "min": 1,
+    "max": 64,
+    "step": 0.5,
+    "default": 4,
+    "rand": "low"
    },
    {
     "key": "seed",

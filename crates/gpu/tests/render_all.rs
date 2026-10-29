@@ -274,3 +274,152 @@ fn mouse_camera_from_effect_data() {
         assert!(diff < back.len() / 200, "{id}: default camera looks like the fixed view ({diff} bytes differ)");
     }
 }
+
+fn solid(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    [rgb[0], rgb[1], rgb[2], 255].repeat((w * h) as usize)
+}
+
+fn text(v: &str) -> phthora_core::Value {
+    phthora_core::Value::Text(v.into())
+}
+
+fn float(v: f32) -> phthora_core::Value {
+    phthora_core::Value::Float(v)
+}
+
+/// Renders effects frame by frame on one engine and returns the top-down output.
+struct Rig {
+    engine: Engine,
+    ts: TimingSettings,
+    frame: u64,
+}
+
+impl Rig {
+    fn new(ctx: &GpuContext, w: u32, h: u32) -> Self {
+        Self { engine: Engine::new(ctx, w, h), ts: TimingSettings::default(), frame: 0 }
+    }
+
+    fn render(&mut self, e: &EffectInstance) -> Vec<u8> {
+        let t = self.ts.at_frame(self.frame);
+        self.engine.render(&[e.resolve(&t, &LiveInputs::default(), &HashMap::new())], &t);
+        self.engine.read_output()
+    }
+}
+
+fn luma_mesh_with(params: &[(&str, phthora_core::Value)]) -> EffectInstance {
+    let mut e = EffectInstance::by_id("luma_mesh").unwrap();
+    e.seed = 0.37;
+    for (k, v) in params {
+        e.set(k, v.clone());
+    }
+    e
+}
+
+fn lit(px: &[u8]) -> usize {
+    px.as_chunks::<4>().0.iter().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count()
+}
+
+fn diff(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).filter(|(x, y)| x != y).count()
+}
+
+#[test]
+fn luma_mesh_lines_and_points() {
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (160, 90);
+    let mut rig = Rig::new(&ctx, w, h);
+    rig.engine.set_source_rgba(w, h, &test_image(w, h));
+    rig.frame = 7;
+    let mesh = rig.render(&luma_mesh_with(&[]));
+    let lines = rig.render(&luma_mesh_with(&[("mode", text("Lines"))]));
+    let points = rig.render(&luma_mesh_with(&[("mode", text("Points"))]));
+    assert!(mesh != lines && mesh != points && lines != points, "the three modes look different");
+    assert!(lit(&lines) > 200 && lit(&points) > 200, "lines {} points {}", lit(&lines), lit(&points));
+    assert!(lit(&mesh) > 0);
+
+    // deterministic: the same frame again, and on a fresh engine
+    let mut other = Rig::new(&ctx, w, h);
+    other.engine.set_source_rgba(w, h, &test_image(w, h));
+    other.frame = 7;
+    for (mode, first) in [("Lines", &lines), ("Points", &points)] {
+        let e = luma_mesh_with(&[("mode", text(mode))]);
+        assert!(&rig.render(&e) == first, "{mode}: same frame twice");
+        assert!(&other.render(&e) == first, "{mode}: fresh engine");
+    }
+
+    // resolution changes the geometry; the other params change their mode
+    let res = |mode: &str, r: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text(mode)), ("resolution", float(r)), ("gridOpacity", float(1.0))]));
+    for mode in ["Mesh", "Lines", "Points"] {
+        let (a, b) = (res(mode, 30.0, &mut rig), res(mode, 120.0, &mut rig));
+        assert!(diff(&a, &b) > 100, "{mode}: resolution changes the picture");
+    }
+    // the default is the original 120 segments
+    let default = rig.render(&luma_mesh_with(&[("gridOpacity", float(1.0))]));
+    assert!(default == res("Mesh", 120.0, &mut rig), "default resolution is 120");
+    let count = |n: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text("Lines")), ("lineCount", float(n))]));
+    assert!(count(20.0, &mut rig) != count(40.0, &mut rig));
+    let thick = |v: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text("Lines")), ("lineThickness", float(v))]));
+    assert!(lit(&thick(1.0, &mut rig)) < lit(&thick(6.0, &mut rig)));
+    let blur = |v: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text("Lines")), ("lineBlur", float(v))]));
+    assert!(lit(&blur(0.0, &mut rig)) < lit(&blur(0.8, &mut rig)), "blur widens the lines");
+    let size = |v: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text("Points")), ("resolution", float(30.0)), ("pointSize", float(v))]));
+    assert!(lit(&size(2.0, &mut rig)) < lit(&size(8.0, &mut rig)));
+    let opacity = |v: f32, rig: &mut Rig| rig.render(&luma_mesh_with(&[("mode", text("Lines")), ("lineOpacity", float(v))]));
+    assert!(opacity(1.0, &mut rig) != opacity(0.4, &mut rig));
+    assert!(lit(&opacity(0.0, &mut rig)) == 0, "opacity 0 draws nothing");
+
+    // blend: on a grey background the three modes differ
+    rig.engine.background = [0.4, 0.4, 0.4, 1.0];
+    for mode in ["Lines", "Points"] {
+        let b = |blend: &str, rig: &mut Rig| {
+            rig.render(&luma_mesh_with(&[("mode", text(mode)), ("blend", text(blend)), ("lineThickness", float(4.0)), ("lineBlur", float(0.3))]))
+        };
+        let (n, a, s) = (b("Normal", &mut rig), b("Additive", &mut rig), b("Screen", &mut rig));
+        assert!(n != a && n != s && a != s, "{mode}: blend modes differ");
+    }
+    // the mesh ignores the blend setting
+    let m = |blend: &str, rig: &mut Rig| rig.render(&luma_mesh_with(&[("blend", text(blend))]));
+    assert!(m("Normal", &mut rig) == m("Screen", &mut rig));
+    rig.engine.background = [0.0, 0.0, 0.0, 1.0];
+
+    // tilt and the mouse camera move every mode
+    use phthora_core::orbit::{Orbit, DATA_KEY};
+    for mode in ["Mesh", "Lines", "Points"] {
+        let base = rig.render(&luma_mesh_with(&[("mode", text(mode))]));
+        let tilted = rig.render(&luma_mesh_with(&[("mode", text(mode)), ("tiltAmount", float(0.8)), ("tiltSpeed", float(0.7))]));
+        assert!(tilted != base, "{mode}: tilt");
+        let mut e = luma_mesh_with(&[("mode", text(mode)), ("mouseControls", phthora_core::Value::Bool(true))]);
+        let mut o = Orbit::default();
+        o.zoom(-8.0);
+        o.rotate(30.0, 10.0, h as f32);
+        e.data.insert(DATA_KEY.into(), o.to_data());
+        assert!(rig.render(&e) != base, "{mode}: mouse camera");
+        e.data.insert(DATA_KEY.into(), Orbit::default().to_data());
+        let back = rig.render(&e);
+        assert!(diff(&back, &base) < back.len() / 100, "{mode}: default camera is the fixed view");
+    }
+}
+
+#[test]
+fn luma_mesh_sizes_are_output_pixels() {
+    let ctx = GpuContext::headless().expect("gpu");
+    // coverage along a line through the middle adds up to the size in pixels, at any output size
+    for (w, h) in [(160u32, 90u32), (320, 180)] {
+        let mut rig = Rig::new(&ctx, w, h);
+        rig.engine.set_source_rgba(w, h, &solid(w, h, [255, 255, 255]));
+        let at = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4) as usize] as f32 / 255.0;
+        // three flat lines: the middle one is horizontal through the centre
+        let flat = [("mode", text("Lines")), ("lumaHeight", float(0.0)), ("lineCount", float(3.0)), ("lineThickness", float(8.0))];
+        let lines = rig.render(&luma_mesh_with(&flat));
+        let cover: f32 = (h / 2 - 12..h / 2 + 12).map(|y| at(&lines, w / 3, y)).sum();
+        assert!((cover - 8.0).abs() < 0.75, "{w}x{h}: line thickness {cover}");
+        let soft = rig.render(&luma_mesh_with(&[flat[0].clone(), flat[1].clone(), flat[2].clone(), flat[3].clone(), ("lineBlur", float(0.5))]));
+        let spread = (h / 2 - 30..h / 2 + 30).filter(|&y| at(&soft, w / 3, y) > 0.02).count();
+        let sharp = (h / 2 - 30..h / 2 + 30).filter(|&y| at(&lines, w / 3, y) > 0.02).count();
+        assert!(spread > sharp + 8, "{w}x{h}: blur spreads the edge ({sharp} -> {spread})");
+        // a point on the centre vertex (even segment count)
+        let points = rig.render(&luma_mesh_with(&[("mode", text("Points")), ("lumaHeight", float(0.0)), ("resolution", float(20.0)), ("pointSize", float(5.0))]));
+        let cover: f32 = (w / 2 - 6..w / 2 + 6).map(|x| at(&points, x, h / 2)).sum();
+        assert!((cover - 5.0).abs() < 0.75, "{w}x{h}: point size {cover}");
+    }
+}
