@@ -3129,6 +3129,7 @@ dependencies = [
  "half",
  "naga",
  "phthora-core",
+ "phthora-seg",
  "png",
  "pollster 1.0.1",
  "serde_json",

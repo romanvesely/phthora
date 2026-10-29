@@ -34,6 +34,11 @@ pub struct Engine {
     pub audio_spectrum: Vec<f32>,
     /// live drawing canvases by effect uid
     pub paint: HashMap<u64, crate::paint::PaintCanvas>,
+    /// see `RenderCtx::blocking`; true by default so export and tests are deterministic,
+    /// the live preview sets it to false
+    pub blocking: bool,
+    /// person mask for Remove Background instead of the network's (tests, other sources)
+    pub person_mask: Option<phthora_seg::Mask>,
     last_output: Option<u64>,
 }
 
@@ -57,6 +62,8 @@ impl Engine {
             assets: Assets::new(),
             audio_spectrum: Vec::new(),
             paint: HashMap::new(),
+            blocking: true,
+            person_mask: None,
             last_output: None,
         }
     }
@@ -156,6 +163,8 @@ impl Engine {
                     assets: &mut self.assets,
                     audio: &self.audio_spectrum,
                     paint: &self.paint,
+                    blocking: self.blocking,
+                    person_mask: self.person_mask.as_ref(),
                 };
                 slot.effect.render(&mut rc, e, input, orig, &slot.out);
             }

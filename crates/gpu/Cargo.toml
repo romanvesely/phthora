@@ -14,6 +14,7 @@ glam = "0.34.1"
 half = "2.7.1"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 phthora-core = { path = "../core" }
+phthora-seg = { path = "../seg" }
 png = "0.18.1"
 pollster = "1.0.1"
 serde_json = "1.0.154"

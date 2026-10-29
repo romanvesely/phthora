@@ -9,7 +9,7 @@ use phthora_core::{EffectDesc, OutputMode, ResolvedEffect};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn ShaderHook>> {
+pub fn create_hook(ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn ShaderHook>> {
     Some(match desc.id.as_str() {
         "eight_bit" => Box::new(Cga::default()),
         "instacolor" => Box::new(Lut::default()),
@@ -21,6 +21,7 @@ pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn Shade
         "ascii" => Box::new(Ascii::default()),
         "caption" => Box::new(Caption::default()),
         "audio_visualizer" => Box::new(Visualizer::default()),
+        "remove_background" => Box::new(super::person::RemoveBackground::new(ctx)),
         "push_draw" | "mask_draw" => Box::new(PaintTex { kind: crate::paint::PaintKind::of(&desc.id)?, uploaded: None, tex: None, seed: 0.0 }),
         _ => return None,
     })

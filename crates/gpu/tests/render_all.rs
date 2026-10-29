@@ -274,3 +274,217 @@ fn mouse_camera_from_effect_data() {
         assert!(diff < back.len() / 200, "{id}: default camera looks like the fixed view ({diff} bytes differ)");
     }
 }
+
+// ---------------------------------------------------------------- Remove Background
+
+/// The models folder is process-wide: tests that point it somewhere take turns.
+static SEG_DIR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Render Remove Background alone with the given parameters; premultiplied, top-down.
+fn remove_bg(engine: &mut Engine, base: &EffectInstance, params: &[(&str, phthora_core::Value)]) -> Vec<u8> {
+    // a clone keeps the uid, so the effect keeps its state between calls
+    let mut e = base.clone();
+    for (k, v) in params {
+        e.set(k, v.clone());
+    }
+    let t = TimingSettings::default().at_frame(0);
+    engine.render(&[e.resolve(&t, &LiveInputs::default(), &HashMap::new())], &t);
+    engine.read_output()
+}
+
+/// Milliseconds per frame of the effect alone: render and wait for the GPU, no readback of the result.
+fn time_frames(ctx: &GpuContext, engine: &mut Engine, base: &EffectInstance, n: u32) -> f64 {
+    let t = TimingSettings::default().at_frame(0);
+    let r = base.resolve(&t, &LiveInputs::default(), &HashMap::new());
+    let start = std::time::Instant::now();
+    for _ in 0..n {
+        engine.render(std::slice::from_ref(&r), &t);
+        ctx.wait();
+    }
+    start.elapsed().as_secs_f64() * 1000.0 / n as f64
+}
+
+/// Mask of `w`x`h` texels (top-down) that is 255 where `f(x, y)` in 0..1 coordinates holds.
+fn shape_mask(w: u32, h: u32, f: impl Fn(f32, f32) -> bool) -> phthora_seg::Mask {
+    let data = (0..w * h).map(|i| if f(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32) { 255 } else { 0 }).collect();
+    phthora_seg::Mask { w, h, data }
+}
+
+#[test]
+fn remove_background_without_model_and_with_masks() {
+    let _turn = SEG_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    use phthora_core::Value::{Bool, Float};
+    let ctx = GpuContext::headless().expect("gpu");
+    let base = EffectInstance::by_id("remove_background").unwrap();
+    let (w, h) = (320u32, 240u32);
+    let img = test_image(w, h);
+    let at = |px: &[u8], x: u32, y: u32| -> [u8; 4] { px[((y * w + x) * 4) as usize..][..4].try_into().unwrap() };
+
+    // no model on disk: the image passes through
+    let empty = std::env::temp_dir().join(format!("phthora-gpu-nomodel-{}", std::process::id()));
+    phthora_seg::set_models_dir(Some(empty.clone()));
+    assert!(!phthora_seg::is_installed());
+    for blocking in [true, false] {
+        let mut engine = Engine::new(&ctx, w, h);
+        engine.set_source_rgba(w, h, &img);
+        engine.blocking = blocking;
+        for _ in 0..3 {
+            let out = remove_bg(&mut engine, &base, &[]);
+            assert!(out == img, "without a model the effect passes the image through (blocking={blocking})");
+        }
+        // showMask and invert do nothing either
+        assert!(remove_bg(&mut engine, &base, &[("showMask", Bool(true)), ("invert", Bool(true))]) == img);
+    }
+
+    // synthetic masks: left half is the person
+    let mut engine = Engine::new(&ctx, w, h);
+    engine.set_source_rgba(w, h, &img);
+    engine.background = [0.0; 4];
+    engine.person_mask = Some(shape_mask(64, 36, |x, _| x < 0.5));
+    let hard = [("feather", Float(0.0))];
+    let out = remove_bg(&mut engine, &base, &hard);
+    assert_eq!(at(&out, 40, 120), at(&img, 40, 120), "person kept");
+    assert_eq!(at(&out, 280, 120)[3], 0, "background transparent");
+    assert_eq!(at(&out, 140, 120)[3], 255, "kept right up to the edge");
+    assert_eq!(at(&out, 180, 120)[3], 0, "removed right behind the edge");
+
+    // feather: a gradient across the edge, centered on it
+    let soft = remove_bg(&mut engine, &base, &[("feather", Float(1.0))]);
+    let (a, b, c) = (at(&soft, 130, 120)[3], at(&soft, 160, 120)[3], at(&soft, 190, 120)[3]);
+    assert!(a > b && b > c, "feather ramps down across the edge: {a} {b} {c}");
+    assert!((60..200).contains(&b), "half coverage at the edge: {b}");
+    assert!(at(&soft, 40, 120)[3] == 255 && at(&soft, 280, 120)[3] == 0, "far from the edge nothing changes");
+
+    // expand grows the person, a negative value shrinks it
+    let grown = remove_bg(&mut engine, &base, &[("feather", Float(0.0)), ("expand", Float(1.0))]);
+    assert_eq!(at(&grown, 190, 120)[3], 255, "expanded past the old edge");
+    assert_eq!(at(&grown, 300, 120)[3], 0, "far background stays removed");
+    let shrunk = remove_bg(&mut engine, &base, &[("feather", Float(0.0)), ("expand", Float(-1.0))]);
+    assert_eq!(at(&shrunk, 130, 120)[3], 0, "shrunk behind the old edge");
+    assert_eq!(at(&shrunk, 40, 120)[3], 255, "core stays");
+
+    // invert swaps person and background
+    let inv = remove_bg(&mut engine, &base, &[("feather", Float(0.0)), ("invert", Bool(true))]);
+    assert_eq!(at(&inv, 40, 120)[3], 0);
+    assert_eq!(at(&inv, 280, 120), at(&img, 280, 120));
+
+    // amount fades the removal: halfway the background keeps half its coverage
+    let half = remove_bg(&mut engine, &base, &[("feather", Float(0.0)), ("amount", Float(0.5))]);
+    assert!(at(&half, 280, 120)[3].abs_diff(128) <= 2, "{:?}", at(&half, 280, 120));
+    assert_eq!(at(&half, 40, 120)[3], 255);
+    assert!(remove_bg(&mut engine, &base, &[("amount", Float(0.0))]) == img, "amount 0 leaves the image alone");
+
+    // showMask: the mask as gray, opaque; rows are not flipped (mask is a top-left quarter)
+    engine.person_mask = Some(shape_mask(64, 36, |x, y| x < 0.5 && y < 0.5));
+    let shown = remove_bg(&mut engine, &base, &[("feather", Float(0.0)), ("showMask", Bool(true))]);
+    assert_eq!(at(&shown, 40, 30), [255, 255, 255, 255], "top left is the person");
+    assert_eq!(at(&shown, 40, 200), [0, 0, 0, 255], "bottom left is not");
+    assert_eq!(at(&shown, 280, 30), [0, 0, 0, 255]);
+    let cut = remove_bg(&mut engine, &base, &hard);
+    assert_eq!(at(&cut, 40, 30), at(&img, 40, 30));
+    assert_eq!(at(&cut, 40, 200)[3], 0, "orientation of the cut-out matches the mask");
+
+    // the background of the render shows where the person is removed
+    engine.background = [0.0, 0.0, 1.0, 1.0];
+    let blue = remove_bg(&mut engine, &base, &hard);
+    assert_eq!(at(&blue, 280, 200), [0, 0, 255, 255]);
+    phthora_seg::set_models_dir(None);
+    let _ = std::fs::remove_dir_all(&empty);
+}
+
+/// Outline of the person in the CC0 test photo, in 1920x1080 pixels (see crates/seg/tests/person.rs).
+const PHOTO_OUTLINE: [(f32, f32); 29] = [
+    (800., 75.), (900., 62.), (1000., 95.), (1070., 180.), (1085., 260.), (1050., 330.), (1015., 415.), (1100., 485.),
+    (1190., 560.), (1260., 650.), (1290., 780.), (1285., 950.), (1215., 1080.), (450., 1080.), (440., 950.), (445., 860.),
+    (430., 740.), (440., 690.), (570., 665.), (650., 700.), (700., 650.), (790., 590.), (830., 540.), (850., 440.),
+    (800., 400.), (760., 330.), (755., 280.), (730., 200.), (740., 150.),
+];
+
+fn in_outline(x: f32, y: f32) -> bool {
+    let p = &PHOTO_OUTLINE;
+    let mut c = false;
+    for i in 0..p.len() {
+        let (a, b) = (p[i], p[(i + 1) % p.len()]);
+        if (a.1 > y) != (b.1 > y) && x < (b.0 - a.0) * (y - a.1) / (b.1 - a.1) + a.0 {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// IoU of the output's coverage (alpha >= 128, top-down) with the outline.
+fn coverage_iou(out: &[u8], w: u32, h: u32) -> f32 {
+    let (mut inter, mut union) = (0u32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            let g = in_outline((x as f32 + 0.5) / w as f32 * 1920.0, (y as f32 + 0.5) / h as f32 * 1080.0);
+            let p = out[((y * w + x) * 4 + 3) as usize] >= 128;
+            inter += (g && p) as u32;
+            union += (g || p) as u32;
+        }
+    }
+    inter as f32 / union as f32
+}
+
+/// With the real network: needs PHTHORA_SEG_MODEL (the .onnx file) and PHTHORA_SEG_PHOTO (the
+/// photo as PNG, 16:9); PHTHORA_SEG_OUT (a folder) additionally gets the results as PNG.
+#[test]
+fn remove_background_with_the_network() {
+    let (Ok(model), Ok(photo)) = (std::env::var("PHTHORA_SEG_MODEL"), std::env::var("PHTHORA_SEG_PHOTO")) else {
+        eprintln!("skipped: set PHTHORA_SEG_MODEL and PHTHORA_SEG_PHOTO");
+        return;
+    };
+    let _turn = SEG_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("phthora-gpu-model-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    phthora_seg::set_models_dir(Some(dir.clone()));
+    std::fs::copy(&model, phthora_seg::model_path()).unwrap();
+    let base = EffectInstance::by_id("remove_background").unwrap();
+    let (w, h, px) = phthora_gpu::assets::decode_png(&std::fs::read(photo).unwrap()).expect("png");
+    let ctx = GpuContext::headless().expect("gpu");
+    let mut engine = Engine::new(&ctx, w, h);
+    engine.set_source_rgba(w, h, &px);
+    engine.background = [0.0; 4];
+    let save = |name: &str, out: &[u8]| {
+        if let Ok(d) = std::env::var("PHTHORA_SEG_OUT") {
+            let mut px = out.to_vec();
+            phthora_gpu::context::unpremultiply(&mut px);
+            let f = std::fs::File::create(std::path::Path::new(&d).join(name)).unwrap();
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.write_header().unwrap().write_image_data(&px).unwrap();
+        }
+    };
+
+    // export path: waits for every frame, same input gives the same mask
+    assert!(engine.blocking);
+    let first = remove_bg(&mut engine, &base, &[]);
+    let iou = coverage_iou(&first, w, h);
+    eprintln!("export: IoU {iou:.3}");
+    assert!(iou > 0.85, "export IoU {iou}");
+    assert!(remove_bg(&mut engine, &base, &[]) == first, "export is deterministic");
+    assert_eq!(phthora_seg::status(), phthora_seg::Status::Ready);
+    save("export.png", &first);
+    save("mask.png", &remove_bg(&mut engine, &base, &[("showMask", phthora_core::Value::Bool(true))]));
+    eprintln!("{w}x{h} effect, blocking: {:.1} ms per frame", time_frames(&ctx, &mut engine, &base, 20));
+
+    // preview path: the first frames pass through, then the worker's mask shows up
+    let mut live = Engine::new(&ctx, w, h);
+    live.set_source_rgba(w, h, &px);
+    live.background = [0.0; 4];
+    live.blocking = false;
+    let start = std::time::Instant::now();
+    let mut out = remove_bg(&mut live, &base, &[]);
+    while out.iter().skip(3).step_by(4).all(|&a| a == 255) && start.elapsed() < std::time::Duration::from_secs(10) {
+        out = remove_bg(&mut live, &base, &[]);
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    let iou = coverage_iou(&out, w, h);
+    eprintln!("preview: IoU {iou:.3}, mask after {:?}", start.elapsed());
+    assert!(iou > 0.85, "preview IoU {iou}");
+    // steady state cost of a preview frame (readback copy and mask passes only)
+    eprintln!("{w}x{h} effect, preview: {:.1} ms per frame", time_frames(&ctx, &mut live, &base, 20));
+    save("preview.png", &out);
+    phthora_seg::set_models_dir(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
