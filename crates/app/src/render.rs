@@ -47,9 +47,19 @@ impl Progress {
     }
 }
 
-/// Timing actually used for a job (a PNG is a single still).
+/// Frame rate a format can store: the wanted one, or the format's maximum (GIF).
+pub fn format_fps(format: Format, fps: f64) -> f64 {
+    format.max_fps().map_or(fps, |m| fps.min(m))
+}
+
+/// Timing actually used for a job (stills are a single frame, GIF has a frame rate limit).
 pub fn job_timing(job: &ExportJob) -> TimingSettings {
-    if job.format == Format::Png { TimingSettings { mode: OutputMode::Image, ..job.timing } } else { job.timing }
+    let mut t = job.timing;
+    if job.format.is_still() {
+        t.mode = OutputMode::Image;
+    }
+    t.fps = format_fps(job.format, t.fps);
+    t
 }
 
 /// Render every frame of the job and hand it to `sink` (top-down, straight RGBA8).

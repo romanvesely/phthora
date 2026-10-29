@@ -18,11 +18,16 @@ const USAGE: &str = "usage:
 options for render:
   --preset FILE        effect chain (.phthora.json)
   --effect ID,...      add effects with default settings (see --list)
-  --out FILE           output file (format from extension: mp4, webm, gif, png)
+  --out FILE           output file, the format follows the name:
+                         .mp4 .webm .gif .apng      video
+                         .webp                      animated for video input, --duration or --fps, else a still
+                         .png .jpg                  one still image
+                         DIR/ or name-%05d.png      PNG sequence (a folder gets <folder>-00001.png ...)
+                       .webp, .apng, .png and sequences keep transparency (--background transparent)
   --duration SEC       output length (default: one pass through the input, 4 s for stills)
-  --fps N              frame rate (default: input rate or 30)
+  --fps N              frame rate (default: input rate or 30; GIF at most 50)
   --size WxH           output size, even numbers up to 4096 (default: input size)
-  --quality Q          ultra | high | medium | low
+  --quality Q          ultra | high | medium | low (MP4, WebM, WebP, JPG; GIF: 256/256/128/64 colors)
   --bpm N              sync effect loops to a tempo
   --background COLOR   #rrggbb, #rrggbbaa or transparent (default: black)
   --flip               mirror the input horizontally
@@ -62,6 +67,15 @@ fn parse_background(s: &str) -> Result<[f32; 4], String> {
         8 => Ok([c(24), c(16), c(8), c(0)]),
         _ => Err(format!("bad color {s}, use #rrggbb or #rrggbbaa")),
     }
+}
+
+/// Output format from the `--out` name: a folder (trailing `/`) or a `%05d` name is a PNG
+/// sequence; `.webp` is moving when `animated` (video input, `--duration` or `--fps`).
+fn output_format(out: &std::path::Path, animated: bool) -> Result<Format, String> {
+    if out.to_string_lossy().ends_with('/') {
+        return Ok(Format::PngSeq);
+    }
+    Format::from_path(out, animated).ok_or_else(|| "output must end in .mp4, .webm, .gif, .webp, .apng, .png or .jpg, be a folder (trailing /) or a name like frame-%05d.png".into())
 }
 
 fn cli_render(args: &[String]) -> Result<(), String> {
@@ -142,14 +156,6 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         i += 1;
     }
     let out = out.ok_or("--out is required")?;
-    let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    let format = match ext.as_str() {
-        "mp4" => Format::Mp4,
-        "webm" => Format::WebM,
-        "gif" => Format::Gif,
-        "png" => Format::Png,
-        _ => return Err("output must end in .mp4, .webm, .gif or .png".into()),
-    };
     if !(0.0..=5.0).contains(&audio_settings.gain) || !(0.0..=1.0).contains(&audio_settings.smoothing) {
         return Err("--audio-gain must be 0 to 5, --audio-smoothing 0 to 1".into());
     }
@@ -168,18 +174,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         && (!(16..=4096).contains(&w) || !(16..=4096).contains(&h)) {
             return Err("--size must be between 16x16 and 4096x4096".into());
         }
-    let backend = match (backend.as_str(), format) {
-        (_, f) if f != Format::Mp4 => Backend::Software,
-        ("software", _) => Backend::Software,
-        ("vaapi", _) => {
-            if !phthora_media::vaapi_available() {
-                return Err("--backend vaapi: no working VAAPI H.264 encoder found".into());
-            }
-            Backend::Vaapi
-        }
-        ("auto", _) => if phthora_media::vaapi_available() { Backend::Vaapi } else { Backend::Software },
-        (b, _) => return Err(format!("unknown backend {b}")),
-    };
+    if !matches!(backend.as_str(), "auto" | "software" | "vaapi") {
+        return Err(format!("unknown backend {backend}"));
+    }
     let mut effects = Vec::new();
     if let Some(p) = &preset {
         let s = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -198,17 +195,39 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         Some(p) => Some(phthora_media::probe(p).map_err(|e| e.to_string())?),
         None => None,
     };
+    let moving_input = info.as_ref().is_some_and(|i| i.kind != phthora_media::MediaKind::Image);
+    let format = output_format(&out, moving_input || duration.is_some() || fps.is_some())?;
+    let backend = match (backend.as_str(), format) {
+        (_, f) if f != Format::Mp4 => Backend::Software,
+        ("software", _) => Backend::Software,
+        ("vaapi", _) => {
+            if !phthora_media::vaapi_available() {
+                return Err("--backend vaapi: no working VAAPI H.264 encoder found".into());
+            }
+            Backend::Vaapi
+        }
+        _ => if phthora_media::vaapi_available() { Backend::Vaapi } else { Backend::Software },
+    };
+    if backend == Backend::Software
+        && let Some(enc) = phthora_media::missing_encoder(format) {
+            return Err(format!("this ffmpeg has no {} encoder ({enc}), cannot write {}", format.label(), out.display()));
+        }
     let (w, h) = size.unwrap_or_else(|| info.as_ref().map(|i| phthora_media::fit_size(i.width, i.height, 4096)).unwrap_or((1280, 720)));
     let video = info.as_ref().filter(|i| i.kind != phthora_media::MediaKind::Image && i.duration > 0.0);
     let clip = video.map(|i| ClipTiming { fps: if i.fps > 0.0 { i.fps } else { 30.0 }, frames: ((i.duration * if i.fps > 0.0 { i.fps } else { 30.0 }).round() as u64).max(1) });
     let in_dur = clip.map(|c| playback.natural_duration(c));
     let in_fps = video.filter(|i| i.fps > 0.0).map(|i| i.fps.round().clamp(1.0, 120.0));
-    let timing = TimingSettings {
-        mode: if format == Format::Png { OutputMode::Image } else { OutputMode::Video },
+    let mut timing = TimingSettings {
+        mode: if format.is_still() { OutputMode::Image } else { OutputMode::Video },
         duration: duration.or(in_dur).unwrap_or(4.0).clamp(0.05, 3600.0),
         fps: fps.or(in_fps).unwrap_or(30.0),
         bpm,
     };
+    let capped = render::format_fps(format, timing.fps);
+    if capped < timing.fps {
+        eprintln!("note: {} takes at most {capped} fps, using {capped}", format.label());
+        timing.fps = capped;
+    }
     // the input's own audio follows the trim; reversed or sped-up input has no matching audio
     let audio = match audio_arg.as_deref() {
         Some("none") => None,
