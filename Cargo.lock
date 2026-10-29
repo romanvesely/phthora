@@ -3111,6 +3111,7 @@ dependencies = [
  "phthora-core",
  "phthora-gpu",
  "phthora-media",
+ "phthora-seg",
  "rand 0.9.5",
  "rfd",
  "serde",

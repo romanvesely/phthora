@@ -16,6 +16,7 @@ phthora-audio = { path = "../audio" }
 phthora-core = { path = "../core" }
 phthora-gpu = { path = "../gpu" }
 phthora-media = { path = "../media" }
+phthora-seg = { path = "../seg" }
 rand = "0.9"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }

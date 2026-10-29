@@ -13,6 +13,8 @@ pub enum Action {
     LearnMidi { uid: u64, key: String },
     /// empty a drawing effect's canvas
     ClearPaint { uid: u64 },
+    /// fetch the person segmentation model (Remove Background)
+    DownloadModel,
 }
 
 pub struct ParamCtx<'a> {
@@ -57,6 +59,9 @@ fn is_disabled(e: &EffectInstance, cond: &Option<String>) -> bool {
 pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCtx) -> bool {
     let mut changed = false;
     let uid = e.uid;
+    if e.desc.id == "remove_background" {
+        model_status(ui, cx);
+    }
     for p in e.desc.params.clone() {
         if p.hidden {
             continue;
@@ -285,6 +290,38 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
 }
 
 const SPEEDS: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
+/// Remove Background needs a model that is downloaded once: offer it, show the progress.
+fn model_status(ui: &mut egui::Ui, cx: &mut ParamCtx) {
+    let warn = Color32::from_rgb(230, 190, 90);
+    match phthora_seg::status() {
+        phthora_seg::Status::Missing => {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(warn, "Needs a person segmentation model, downloaded once.");
+                if ui.small_button("Download…").clicked() {
+                    cx.actions.push(Action::DownloadModel);
+                }
+            });
+        }
+        phthora_seg::Status::Downloading { done, total } => {
+            let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            ui.add(egui::ProgressBar::new(frac).text(format!("Downloading model, {} of {} KB", done / 1024, total / 1024)).desired_height(14.0));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        phthora_seg::Status::Failed(msg) => {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(warn, format!("Model unusable: {msg}"));
+                if ui.small_button("Download again…").clicked() {
+                    cx.actions.push(Action::DownloadModel);
+                }
+            });
+        }
+        phthora_seg::Status::Loading => {
+            ui.weak("Loading model…");
+        }
+        phthora_seg::Status::Available | phthora_seg::Status::Ready => {}
+    }
+}
 
 /// Copy and paste a modulator between parameters. Returns the modulator to paste: all its
 /// settings apply, whether it is on stays as it was.

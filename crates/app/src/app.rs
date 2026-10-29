@@ -58,6 +58,7 @@ enum Confirm {
     DeletePreset(PathBuf),
     OverwritePreset(String),
     Quit,
+    DownloadModel,
 }
 
 /// Group edits from the stack UI, applied after drawing it.
@@ -168,6 +169,7 @@ pub struct PhthoraApp {
     popout_on_top: bool,
     /// state shared with the preview window, which runs its own passes (see `popout_window`)
     popout_state: Arc<Mutex<Popout>>,
+    model_download: Option<std::thread::JoinHandle<Result<PathBuf, phthora_seg::Error>>>,
     dialog: Option<Dialog>,
     /// the user confirmed quitting while an export runs
     quit_ok: bool,
@@ -246,6 +248,7 @@ impl PhthoraApp {
             popout: false,
             popout_on_top: false,
             popout_state: Arc::default(),
+            model_download: None,
             dialog: None,
             quit_ok: false,
             preset_folder: None,
@@ -760,6 +763,9 @@ impl PhthoraApp {
             }
         self.audio.play(video_playing, self.play_time, self.timing.duration);
         self.last_tick = Some(now);
+        // a still frame renders once: segmentation has to finish within that render; while
+        // frames keep coming it runs beside them and the newest mask is used
+        self.engine.blocking = !(video_playing || matches!(self.source, Source::Live(_)));
         let alive: HashSet<u64> = self.chain.effects.iter().map(|e| e.uid).collect();
         self.engine.retain(|u| alive.contains(&u));
         if matches!(self.source, Source::Live(_)) {
@@ -2028,6 +2034,12 @@ impl PhthoraApp {
         match run {
             Some(Confirm::DeletePreset(p)) => self.remove_preset_file(&p),
             Some(Confirm::OverwritePreset(name)) => self.write_preset(&name),
+            Some(Confirm::DownloadModel) => {
+                if self.model_download.is_none() {
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    self.model_download = Some(std::thread::spawn(move || phthora_seg::download(|_, _| {}, &cancel)));
+                }
+            }
             Some(Confirm::Quit) => {
                 self.quit_ok = true;
                 if let Some((_, p, _)) = &self.export.running {
@@ -2083,6 +2095,16 @@ impl PhthoraApp {
     fn handle_actions(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::DownloadModel => {
+                    let m = &phthora_seg::MODEL;
+                    let host = m.url.split('/').nth(2).unwrap_or(m.url);
+                    let text = format!(
+                        "Remove Background needs a person segmentation model ({} KB, Apache-2.0). Download it from {host} into {}?",
+                        m.size / 1024,
+                        phthora_seg::models_dir().display()
+                    );
+                    self.dialog = Some(Dialog::Confirm { text, yes: "Download", action: Confirm::DownloadModel });
+                }
                 Action::ClearPaint { uid } => {
                     if let Some(e) = self.chain.get_mut(uid) {
                         e.data.remove(paint::DATA_KEY);
@@ -2228,6 +2250,17 @@ impl eframe::App for PhthoraApp {
         if ctx.input(|i| i.viewport().close_requested()) && self.export.running.is_some() && !self.quit_ok {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.dialog = Some(Dialog::Confirm { text: "An export is running. Quit and cancel it?".into(), yes: "Quit", action: Confirm::Quit });
+        }
+        if self.model_download.as_ref().is_some_and(|h| h.is_finished()) {
+            match self.model_download.take().unwrap().join() {
+                Ok(Ok(_)) => {
+                    self.notify("Model installed");
+                    self.preview.invalidate();
+                }
+                Ok(Err(phthora_seg::Error::Cancelled)) => {}
+                Ok(Err(e)) => self.error("Model download failed", e.to_string()),
+                Err(_) => self.error("Model download failed", "the download thread crashed"),
+            }
         }
         self.dialogs(&ctx);
         self.about_window(&ctx);
