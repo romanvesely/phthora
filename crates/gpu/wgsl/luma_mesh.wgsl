@@ -12,6 +12,14 @@ struct U {
     b_lumaInvert: f32,
     opacity: f32,
     b_wireframe: f32,
+    // lines and points: premultiplied output, target size in pixels, strip layout
+    b_premul: f32,
+    segs: f32,
+    lineCount: f32,
+    lineWidth: f32,
+    lineSoft: f32,
+    pointSize: f32,
+    viewport: vec2<f32>,
 }
 
 struct VertexOutput {
@@ -337,74 +345,37 @@ fn loopNoise3d(val: vec2<f32>, time: f32, loopDuration: f32, speed: f32) -> f32 
     return mix(_e68, _e69, (_e70 / _e71));
 }
 
+// Height of the mesh at a texture coordinate (luma, warp noise and bands).
+fn displace_at(uv: vec2<f32>) -> f32 {
+    let MAX_DISPLACE = 400f;
+    let warpSpeed = 1.5f;
+    var disp = 0f;
+    let col = textureSampleLevel(tInput_t, tInput_s, uv, 0f).xyz;
+    let b = luma(col);
+    disp = disp + ((b * global.lumaHeight) * MAX_DISPLACE);
+    if (global.b_lumaInvert > 0.5f) {
+        disp = -(disp);
+    }
+    let nDisp = loopNoise3d((uv * global.warpScale), (global.time + global.seed), 1f, warpSpeed);
+    disp = disp + (((nDisp * global.warpHeight) * MAX_DISPLACE) * 0.5f);
+    let yt = (((uv.y * 10f) + (global.time * 10f)) + (global.seed * 10f));
+    var offset = noise1d(yt);
+    offset = pow(offset, 4f);
+    offset = step(0.5f, offset);
+    disp = disp + (((offset * MAX_DISPLACE) * global.bandsHeight) * 0.25f);
+    return disp;
+}
+
 fn main_1() {
-    var MAX_DISPLACE: f32 = 400f;
-    var disp: f32 = 0f;
-    var col: vec3<f32>;
-    var b: f32;
-    var warpSpeed: f32 = 1.5f;
-    var nDisp: f32;
-    var yt: f32;
-    var offset: f32;
     var dispPosition: vec3<f32>;
     var mvPosition: vec4<f32>;
 
-    let _e31 = uv_1;
-    vUv = _e31;
-    let _e36 = uv_1;
-    let _e38 = textureSampleLevel(tInput_t, tInput_s, _e36, 0f);
-    col = _e38.xyz;
-    let _e41 = col;
-    let _e42 = luma(_e41);
-    b = _e42;
-    let _e44 = disp;
-    let _e45 = b;
-    let _e46 = global.lumaHeight;
-    let _e48 = MAX_DISPLACE;
-    disp = (_e44 + ((_e45 * _e46) * _e48));
-    let _e51 = global.b_lumaInvert;
-    if (_e51 > 0.5f) {
-        let _e54 = disp;
-        disp = -(_e54);
-    }
-    let _e58 = uv_1;
-    let _e59 = global.warpScale;
-    let _e61 = global.time;
-    let _e62 = global.seed;
-    let _e65 = warpSpeed;
-    let _e66 = loopNoise3d((_e58 * _e59), (_e61 + _e62), 1f, _e65);
-    nDisp = _e66;
-    let _e68 = disp;
-    let _e69 = nDisp;
-    let _e70 = global.warpHeight;
-    let _e72 = MAX_DISPLACE;
-    disp = (_e68 + (((_e69 * _e70) * _e72) * 0.5f));
-    let _e77 = uv_1;
-    let _e81 = global.time;
-    let _e85 = global.seed;
-    yt = (((_e77.y * 10f) + (_e81 * 10f)) + (_e85 * 10f));
-    let _e90 = yt;
-    let _e91 = noise1d(_e90);
-    offset = _e91;
-    let _e93 = offset;
-    offset = pow(_e93, 4f);
-    let _e97 = offset;
-    offset = step(0.5f, _e97);
-    let _e99 = disp;
-    let _e100 = offset;
-    let _e101 = MAX_DISPLACE;
-    let _e103 = global.bandsHeight;
-    disp = (_e99 + (((_e100 * _e101) * _e103) * 0.25f));
-    let _e108 = position_1;
-    dispPosition = _e108;
-    let _e111 = disp;
-    dispPosition.z = _e111;
-    let _e112 = global.modelViewMatrix;
-    let _e113 = dispPosition;
-    mvPosition = (_e112 * vec4<f32>(_e113.x, _e113.y, _e113.z, 1f));
-    let _e122 = global.projectionMatrix;
-    let _e123 = mvPosition;
-    gl_Position = (_e122 * _e123);
+    vUv = uv_1;
+    let disp = displace_at(uv_1);
+    dispPosition = position_1;
+    dispPosition.z = disp;
+    mvPosition = (global.modelViewMatrix * vec4<f32>(dispPosition.x, dispPosition.y, dispPosition.z, 1f));
+    gl_Position = (global.projectionMatrix * mvPosition);
     return;
 }
 
@@ -426,4 +397,92 @@ fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         col = vec4<f32>(global.gridColor * l, l);
     }
     return vec4<f32>(col.xyz, col.w * global.opacity);
+}
+
+// ---- lines and points: generated from the grid position, no vertex buffer
+
+const PLANE_SIZE = 1024f;
+
+// Clip position of the displaced grid point at texture coordinate uv.
+fn project(uv: vec2<f32>) -> vec4<f32> {
+    let p = vec4<f32>((uv.x - 0.5) * PLANE_SIZE, (uv.y - 0.5) * PLANE_SIZE, displace_at(uv), 1f);
+    return global.projectionMatrix * (global.modelViewMatrix * p);
+}
+
+// Pixel offset (from the centre) converted to a clip space offset.
+fn to_clip(c: vec4<f32>, px: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(c.xy + px / (global.viewport * 0.5) * c.w, c.z, c.w);
+}
+
+fn output_color(c: vec3<f32>, a: f32) -> vec4<f32> {
+    if (global.b_premul > 0.5) {
+        return vec4<f32>(c * a, a);
+    }
+    return vec4<f32>(c, a);
+}
+
+struct LineOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) col: vec3<f32>,
+    @location(1) across: f32,
+}
+
+// One instance per line, a triangle strip of (segs + 1) points with two vertices each.
+@vertex
+fn vs_line(@builtin(vertex_index) vi: u32, @builtin(instance_index) row: u32) -> LineOut {
+    let n = global.segs;
+    let u = f32(vi / 2u) / n;
+    let v = f32(row) / max(global.lineCount - 1f, 1f);
+    let side = select(-1f, 1f, (vi & 1u) == 1u);
+    let du = 1f / n;
+    let c = project(vec2<f32>(u, v));
+    let a = project(vec2<f32>(max(u - du, 0f), v));
+    let b = project(vec2<f32>(min(u + du, 1f), v));
+    let hv = global.viewport * 0.5;
+    var t = b.xy / b.w * hv - a.xy / a.w * hv;
+    if (dot(t, t) < 1e-8) {
+        t = vec2<f32>(1f, 0f);
+    }
+    t = normalize(t);
+    let half_w = (global.lineWidth + global.lineSoft) * 0.5;
+    var o: LineOut;
+    o.pos = to_clip(c, vec2<f32>(-t.y, t.x) * (side * half_w));
+    o.col = textureSampleLevel(tInput_t, tInput_s, vec2<f32>(u, v), 0f).xyz;
+    o.across = side * half_w;
+    return o;
+}
+
+@fragment
+fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
+    let hw = global.lineWidth * 0.5;
+    let s = global.lineSoft * 0.5;
+    let a = 1f - smoothstep(hw - s, hw + s, abs(in.across));
+    return output_color(in.col, a * global.opacity);
+}
+
+struct PointOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) col: vec3<f32>,
+    @location(1) corner: vec2<f32>,
+}
+
+// One instance per grid point, a four vertex strip around it.
+@vertex
+fn vs_point(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PointOut {
+    let per_row = u32(global.segs) + 1u;
+    let uv = vec2<f32>(f32(ii % per_row), f32(ii / per_row)) / global.segs;
+    let corner = vec2<f32>(select(-1f, 1f, (vi & 1u) == 1u), select(-1f, 1f, (vi & 2u) == 2u));
+    let half_px = global.pointSize * 0.5 + 0.5;
+    var o: PointOut;
+    o.pos = to_clip(project(uv), corner * half_px);
+    o.col = textureSampleLevel(tInput_t, tInput_s, uv, 0f).xyz;
+    o.corner = corner * half_px;
+    return o;
+}
+
+@fragment
+fn fs_point(in: PointOut) -> @location(0) vec4<f32> {
+    let r = global.pointSize * 0.5;
+    let a = 1f - smoothstep(r - 0.5, r + 0.5, length(in.corner));
+    return output_color(in.col, a);
 }
