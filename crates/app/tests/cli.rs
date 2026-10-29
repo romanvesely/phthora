@@ -34,18 +34,17 @@ fn probe(path: &Path, entries: &str) -> String {
 }
 
 #[test]
-fn list_hides_unavailable_effects() {
+fn list_shows_all_effects() {
     let out = run(bin().args(["render", "--list"]));
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.lines().any(|l| l.starts_with("pixelate ")));
     assert!(s.lines().any(|l| l.starts_with("data_mosh ")));
-    assert!(!s.contains("push_draw") && !s.contains("mask_draw"));
-    assert!(s.contains("audio_visualizer"));
+    assert!(s.contains("audio_visualizer") && s.contains("push_draw") && s.contains("mask_draw"));
 }
 
 #[test]
 fn unknown_effect_is_an_error() {
-    let out = bin().args(["render", "--effect", "push_draw", "--out", "x.png"]).output().unwrap();
+    let out = bin().args(["render", "--effect", "no_such_effect", "--out", "x.png"]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unknown effect"));
 }

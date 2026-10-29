@@ -2,6 +2,7 @@
 
 use crate::audio_ui::{AudioState, Src};
 use phthora_audio::{MidiIn, MidiValues};
+use phthora_gpu::paint::{self, PaintCanvas, PaintKind};
 use crate::params_ui::{self, Action, ParamCtx};
 use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
@@ -40,6 +41,16 @@ struct Learn {
     started: Instant,
 }
 
+/// A brush stroke in progress, in canvas pixels.
+struct Stroke {
+    uid: u64,
+    /// where the last brush step was placed
+    last: Pos2,
+    /// brush steps owed since the last frame (fractional)
+    carry: f64,
+    at: Instant,
+}
+
 /// How long MIDI learn waits for a message.
 const LEARN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
@@ -61,6 +72,9 @@ pub struct PhthoraApp {
     midi_values: MidiValues,
     /// modulator waiting for the next MIDI message
     learning: Option<Learn>,
+    /// drawing effect chosen to receive mouse strokes (else the last one in the stack)
+    draw_target: Option<u64>,
+    stroke: Option<Stroke>,
     playback: Playback,
     /// VAAPI H.264 works here (checked in the background at start)
     vaapi: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -120,6 +134,8 @@ impl PhthoraApp {
             midi: MidiIn::start(),
             midi_values: MidiValues::new(),
             learning: None,
+            draw_target: None,
+            stroke: None,
             playback: Playback::default(),
             vaapi: Default::default(),
             timing: TimingSettings::default(),
@@ -157,6 +173,80 @@ impl PhthoraApp {
         let flag = app.vaapi.clone();
         std::thread::spawn(move || flag.store(phthora_media::vaapi_available(), Ordering::Relaxed));
         app
+    }
+
+    /// The drawing effect that receives mouse strokes.
+    fn active_draw(&self) -> Option<u64> {
+        let drawable = |e: &&phthora_core::EffectInstance| e.enabled && PaintKind::of(&e.desc.id).is_some();
+        let mut fx = self.chain.effects.iter().filter(drawable);
+        match self.draw_target {
+            Some(u) if self.chain.effects.iter().filter(drawable).any(|e| e.uid == u) => Some(u),
+            _ => fx.next_back().map(|e| e.uid),
+        }
+    }
+
+    /// Keep the engine's canvases in step with the drawing effects (size, undo, presets).
+    fn sync_paint(&mut self) {
+        let size = self.engine.size();
+        let mut alive = HashSet::new();
+        for e in &self.chain.effects {
+            let Some(kind) = PaintKind::of(&e.desc.id) else { continue };
+            alive.insert(e.uid);
+            let c = self.engine.paint.entry(e.uid).or_insert_with(|| PaintCanvas::new(kind, size.0, size.1));
+            c.resize(size.0, size.1);
+            let url = e.data.get(paint::DATA_KEY).map(String::as_str).unwrap_or("");
+            // a stroke in progress is newer than the stored data
+            if url != c.synced && self.stroke.as_ref().is_none_or(|s| s.uid != e.uid) {
+                c.load_data_url(url);
+            }
+        }
+        self.engine.paint.retain(|u, _| alive.contains(u));
+    }
+
+    /// Brush input on the preview at `rect` (the displayed output).
+    fn draw_input(&mut self, ui: &egui::Ui, resp: &egui::Response, rect: Rect) {
+        let Some(uid) = self.active_draw() else {
+            self.stroke = None;
+            return;
+        };
+        let down = resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down());
+        let Some(c) = self.engine.paint.get_mut(&uid) else { return };
+        let (cw, ch) = c.size();
+        let to_canvas = |p: Pos2| Pos2::new((p.x - rect.left()) / rect.width() * cw as f32, (p.y - rect.top()) / rect.height() * ch as f32);
+        let pos = ui.input(|i| i.pointer.latest_pos()).map(to_canvas);
+        match (&mut self.stroke, down, pos) {
+            (None, true, Some(p)) if rect.contains(resp.interact_pointer_pos().unwrap_or(Pos2::ZERO)) => {
+                // the first step lands right away, without a jump from an old position
+                self.stroke = Some(Stroke { uid, last: p, carry: 1.0, at: Instant::now() });
+            }
+            (Some(s), true, Some(p)) if s.uid == uid => {
+                let now = Instant::now();
+                s.carry += now.duration_since(s.at).as_secs_f64() * paint::DAB_RATE;
+                s.at = now;
+                let n = s.carry.floor() as u32;
+                s.carry -= n as f64;
+                let erase = self.chain.effects.iter().find(|e| e.uid == uid).is_some_and(|e| e.get("erase").is_some_and(|v| v.as_bool()));
+                let from = s.last;
+                for k in 1..=n {
+                    let q = from + (p - from) * (k as f32 / n as f32);
+                    c.dab(q.x, q.y, (q.x - s.last.x, q.y - s.last.y), erase);
+                    s.last = q;
+                }
+                ui.ctx().request_repaint();
+            }
+            (Some(_), false, _) | (Some(_), _, None) => self.end_stroke(),
+            _ => {}
+        }
+    }
+
+    /// Store the finished stroke in the effect, so presets and undo see it.
+    fn end_stroke(&mut self) {
+        let Some(s) = self.stroke.take() else { return };
+        if let (Some(c), Some(e)) = (self.engine.paint.get_mut(&s.uid), self.chain.get_mut(s.uid)) {
+            let url = c.to_data_url();
+            c.synced = url.clone();
+            e.data.insert(paint::DATA_KEY.into(), url);
+        }
     }
 
     /// Take the newest MIDI values and finish a pending learn.
@@ -450,6 +540,7 @@ impl PhthoraApp {
         let live = self.audio.inputs(n, timing.fps);
         self.engine.audio_spectrum.clone_from(&self.audio.spectrum);
         self.poll_midi();
+        self.sync_paint();
         let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &self.midi_values);
         self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
         let video = match &self.source {
@@ -685,6 +776,8 @@ impl PhthoraApp {
         let playhead = self.last_ft.export_progress;
         let custom_bands = self.audio.settings.custom.len();
         let blink = self.learning.as_ref().is_some_and(|l| l.started.elapsed().as_millis() / 300 % 2 == 0);
+        let active_draw = self.active_draw();
+        let mut pick_draw = None;
         if n == 0 {
             ui.add_space(12.0);
             ui.label(egui::RichText::new("No effects. Add one from the list on the left, or press Chaos.").weak());
@@ -738,6 +831,13 @@ impl PhthoraApp {
                                 }
                                 e.modulators.clear();
                             }
+                            if PaintKind::of(&e.desc.id).is_some() {
+                                let on = active_draw == Some(uid);
+                                let txt = egui::RichText::new("✏").color(if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() });
+                                if ui.add(egui::Button::new(txt).selected(on).small()).on_hover_text("Mouse draw: paint on the preview with this effect").clicked() {
+                                    pick_draw = Some(uid);
+                                }
+                            }
                             let lock = if e.locked { "🔒" } else { "🔓" };
                             if ui.small_button(lock).on_hover_text("Lock: kept by Chaos and preset loading").clicked() {
                                 e.locked = !e.locked;
@@ -767,6 +867,9 @@ impl PhthoraApp {
         if let Some(uid) = remove {
             self.chain.remove(uid);
         }
+        if pick_draw.is_some() {
+            self.draw_target = pick_draw;
+        }
         if let Some(uid) = duplicate {
             self.chain.duplicate(uid);
         }
@@ -789,7 +892,11 @@ impl PhthoraApp {
                 egui::CollapsingHeader::new(cat).default_open(true).open(if filter.is_empty() { None } else { Some(true) }).show(ui, |ui| {
                     for d in items {
                         if ui.add(egui::Button::new(&d.name).frame(false)).clicked() {
-                            self.chain.add(&d.id);
+                            let uid = self.chain.add(&d.id);
+                            // a new drawing effect takes the mouse
+                            if PaintKind::of(&d.id).is_some() {
+                                self.draw_target = uid;
+                            }
                         }
                     }
                 });
@@ -803,7 +910,12 @@ impl PhthoraApp {
         let scale = (avail.width() / w as f32).min(avail.height() / h as f32);
         let size = Vec2::new(w as f32 * scale, h as f32 * scale);
         let rect = Rect::from_center_size(avail.center(), size);
-        ui.allocate_rect(avail, Sense::hover());
+        let drawing = self.active_draw().is_some();
+        let resp = ui.allocate_rect(avail, if drawing { Sense::drag() } else { Sense::hover() });
+        if drawing && resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        self.draw_input(ui, &resp, rect);
         let painter = ui.painter_at(avail);
         // checkerboard for transparency
         let cell = 12.0;
@@ -1040,6 +1152,14 @@ impl PhthoraApp {
     fn handle_actions(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::ClearPaint { uid } => {
+                    if let Some(e) = self.chain.get_mut(uid) {
+                        e.data.remove(paint::DATA_KEY);
+                    }
+                    if let Some(c) = self.engine.paint.get_mut(&uid) {
+                        c.load_data_url("");
+                    }
+                }
                 Action::LearnMidi { uid, key } => {
                     let since = self.midi.seq();
                     self.learning = Some(Learn { uid, key, since, started: Instant::now() });

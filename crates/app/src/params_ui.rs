@@ -11,6 +11,8 @@ pub enum Action {
     PickFile { uid: u64 },
     /// map the next MIDI controller or note to this parameter's modulator
     LearnMidi { uid: u64, key: String },
+    /// empty a drawing effect's canvas
+    ClearPaint { uid: u64 },
 }
 
 pub struct ParamCtx<'a> {
@@ -173,6 +175,8 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                     if ui.button(&p.label).clicked() {
                         if key == "load" {
                             cx.actions.push(Action::PickFile { uid });
+                        } else if key == "clear" && phthora_gpu::paint::PaintKind::of(&e.desc.id).is_some() {
+                            cx.actions.push(Action::ClearPaint { uid });
                         } else {
                             e.trigger(&key);
                         }

@@ -72,6 +72,8 @@ struct Rendered {
     look: ([u32; 4], bool, (u32, u32)),
     /// audio spectrum, only while an effect draws it
     spectrum: Vec<u32>,
+    /// versions of the live drawing canvases
+    paint: Vec<(u64, u64)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -116,7 +118,9 @@ impl Preview {
         }
         let look = (engine.background.map(f32::to_bits), engine.flip_x, engine.size());
         let spectrum = if effects.iter().any(|e| e.desc.id == "audio_visualizer") { engine.audio_spectrum.iter().map(|v| v.to_bits()).collect() } else { Vec::new() };
-        let next = Rendered { frame: n, source, effects, look, spectrum };
+        let mut paint: Vec<(u64, u64)> = engine.paint.iter().map(|(u, c)| (*u, c.version)).collect();
+        paint.sort_unstable();
+        let next = Rendered { frame: n, source, effects, look, spectrum, paint };
         if self.last.as_ref() == Some(&next) {
             return Step::Unchanged;
         }
