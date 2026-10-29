@@ -5,6 +5,7 @@
 //! - [`Decoder`]: streaming frames from video/GIF (preview and export)
 //! - [`Encoder`]: frames to MP4 / WebM / GIF / PNG, optional audio mux
 
+mod clip;
 mod decoder;
 mod encoder;
 mod error;
@@ -14,6 +15,7 @@ mod probe;
 mod size;
 mod util;
 
+pub use clip::ClipReader;
 pub use decoder::{DecodeOptions, Decoder, Frame};
 pub use encoder::{AudioSource, Backend, EncodeSettings, Encoder, Format, Quality, vaapi_available};
 pub use error::{MediaError, Result};

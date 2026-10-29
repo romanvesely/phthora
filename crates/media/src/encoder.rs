@@ -1,7 +1,7 @@
 //! Encoder: raw RGBA frames -> ffmpeg stdin -> MP4 / WebM / GIF / PNG.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -134,23 +134,39 @@ pub struct Encoder {
     written: Arc<AtomicU64>,
 }
 
-const VAAPI_DEVICE: &str = "/dev/dri/renderD128";
+/// Render node that can encode H.264 through VAAPI, found once by test encodes.
+fn vaapi_device() -> Option<&'static str> {
+    static DEV: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    DEV.get_or_init(|| {
+        if !crate::ffmpeg_available() {
+            return None;
+        }
+        let mut nodes: Vec<String> = std::fs::read_dir("/dev/dri")
+            .ok()?
+            .flatten()
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .filter(|p| p.rsplit('/').next().is_some_and(|n| n.starts_with("renderD")))
+            .collect();
+        nodes.sort();
+        nodes.into_iter().find(|dev| {
+            ffmpeg_cmd()
+                .args(["-vaapi_device", dev, "-f", "lavfi", "-i", "color=black:s=256x256:r=5:d=0.4"])
+                .args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+    })
+    .as_deref()
+}
 
-/// True if an H.264 VAAPI encode works on this machine (runs a tiny test
-/// encode, so call it once and cache the result).
+/// True if an H.264 VAAPI encode works on this machine. The first call runs test
+/// encodes (a fraction of a second); the result is cached.
 pub fn vaapi_available() -> bool {
-    if !crate::ffmpeg_available() || !Path::new(VAAPI_DEVICE).exists() {
-        return false;
-    }
-    ffmpeg_cmd()
-        .args(["-vaapi_device", VAAPI_DEVICE, "-f", "lavfi", "-i", "color=black:s=256x256:r=5:d=0.4"])
-        .args(["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    vaapi_device().is_some()
 }
 
 /// RGB -> YUV conversion step. Uses BT.709 / limited range so players show the colors the app rendered.
@@ -170,7 +186,7 @@ fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
     let mut push = |v: &[&str]| a.extend(v.iter().map(|x| x.to_string()));
     push(&["-y"]);
     if s.backend == Backend::Vaapi {
-        push(&["-vaapi_device", VAAPI_DEVICE]);
+        push(&["-vaapi_device", vaapi_device().unwrap_or("/dev/dri/renderD128")]);
     }
     push(&["-f", "rawvideo", "-pix_fmt", "rgba", "-s"]);
     a.push(format!("{}x{}", s.width, s.height));
@@ -253,6 +269,9 @@ impl Encoder {
         }
         if s.backend == Backend::Vaapi && s.format != Format::Mp4 {
             return bad("VAAPI backend only supports MP4");
+        }
+        if s.backend == Backend::Vaapi && !vaapi_available() {
+            return bad("no VAAPI H.264 encoder on this machine");
         }
         let mut with_audio = false;
         if let Some(au) = &s.audio

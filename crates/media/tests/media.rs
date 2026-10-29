@@ -526,3 +526,43 @@ fn encode_vaapi_if_available() {
     assert_eq!((info.codec.as_str(), info.width, info.height), ("h264", 128, 96));
     assert_eq!(count_frames(&p).unwrap(), 20);
 }
+
+// ---------------------------------------------------------------- clip reader
+
+#[test]
+fn clip_reader_random_access_matches_sequential_decode() {
+    let t = Tmp::new("clip");
+    let src = make_video(&t);
+    let info = probe(&src).unwrap();
+    let reference: Vec<Vec<u8>> = drain(open(&src, 32, 24, DecodeOptions { fps: Some(25.0), ..Default::default() })).into_iter().map(|f| f.data).collect();
+    assert_eq!(reference.len(), 50);
+    let clip = ClipReader::open(&src, info, 32, 24);
+    assert_eq!(clip.frame_count(), 50);
+    // forward, a jump back, reverse run, ping-pong turn at the end, a far jump
+    let order: Vec<u64> = (0..12).chain([3]).chain((20..30).rev()).chain([47, 48, 49, 48, 47]).chain([5, 44]).collect();
+    for (k, &i) in order.iter().enumerate() {
+        let ahead: Vec<u64> = order[k + 1..].iter().take(8).copied().collect();
+        let f = clip.get_blocking(i, &ahead).unwrap_or_else(|| panic!("frame {i}: {:?}", clip.error()));
+        assert!(f.data == reference[i as usize], "frame {i} differs from sequential decode");
+    }
+    assert!(clip.error().is_none());
+}
+
+#[test]
+fn clip_reader_prefetches_without_blocking() {
+    let t = Tmp::new("clip-pre");
+    let src = make_video(&t);
+    let clip = ClipReader::open(&src, probe(&src).unwrap(), 32, 24);
+    clip.want(&(0..10).collect::<Vec<_>>());
+    let t0 = Instant::now();
+    while clip.get(9).is_none() {
+        assert!(t0.elapsed() < Duration::from_secs(10), "prefetch did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // get() never blocks, also for frames that are not decoded
+    let t1 = Instant::now();
+    assert!(clip.get(40).is_none());
+    assert!(t1.elapsed() < Duration::from_millis(5));
+    // past the real end: the last frame
+    assert!(clip.get_blocking(999, &[]).is_some());
+}
