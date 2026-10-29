@@ -1,7 +1,7 @@
 //! Widgets for effect parameters and their modulators.
 
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
-use phthora_core::modulator::{keyframe_value, Modulator, Shape};
+use phthora_core::modulator::{keyframe_value, Band, Modulator, Shape};
 use phthora_core::params::{ColorStop, ParamKind, Value};
 use phthora_core::{EffectInstance, OutputMode};
 use std::collections::{BTreeMap, HashSet};
@@ -18,6 +18,8 @@ pub struct ParamCtx<'a> {
     pub playhead: f64,
     pub actions: &'a mut Vec<Action>,
     pub open_mods: &'a mut HashSet<(u64, String)>,
+    /// user audio bands defined in the audio settings
+    pub custom_bands: usize,
 }
 
 const LABEL_W: f32 = 92.0;
@@ -103,7 +105,7 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                 }
                 if cx.open_mods.contains(&(uid, key.clone())) {
                     let m = e.modulators.entry(key.clone()).or_default();
-                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), cx.playhead) {
+                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), cx.playhead, cx.custom_bands) {
                         changed = true;
                     }
                 }
@@ -234,21 +236,28 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
 
 const SPEEDS: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 
-fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64) -> bool {
+fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64, custom_bands: usize) -> bool {
     let before = m.clone();
     egui::Frame::group(ui.style()).inner_margin(6.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.checkbox(&mut m.enabled, "on");
             egui::ComboBox::from_id_salt(id.with("shape")).selected_text(m.shape.label()).width(80.0).show_ui(ui, |ui| {
                 for s in Shape::ALL {
-                    // audio and MIDI input are not available in this version
-                    if matches!(s, Shape::Audio | Shape::Midi) {
+                    // MIDI input is not available yet
+                    if s == Shape::Midi {
                         continue;
                     }
                     ui.selectable_value(&mut m.shape, s, s.label());
                 }
             });
-            if m.shape != Shape::Keys {
+            if m.shape == Shape::Audio {
+                let bands: Vec<Band> = Band::BUILTIN.into_iter().chain((0..custom_bands as u8).map(Band::Custom)).collect();
+                egui::ComboBox::from_id_salt(id.with("band")).selected_text(m.band.name()).width(70.0).show_ui(ui, |ui| {
+                    for b in bands {
+                        ui.selectable_value(&mut m.band, b, b.name());
+                    }
+                });
+            } else if m.shape != Shape::Keys {
                 ui.checkbox(&mut m.looped, "loop").on_hover_text("Speed relative to the effect loop instead of the whole output");
             }
         });
@@ -261,7 +270,9 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f6
         } else {
             egui::Grid::new(id.with("grid")).num_columns(4).spacing([6.0, 2.0]).show(ui, |ui| {
                 ui.label("speed");
-                if m.looped {
+                if m.shape == Shape::Audio {
+                    ui.label("–");
+                } else if m.looped {
                     egui::ComboBox::from_id_salt(id.with("speed")).selected_text(format!("{}", m.speed)).width(50.0).show_ui(ui, |ui| {
                         for s in SPEEDS {
                             ui.selectable_value(&mut m.speed, s, format!("{s}"));

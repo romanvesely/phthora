@@ -1,6 +1,7 @@
 //! phthora: real-time GPU effect mixer for images, video and GIFs.
 
 mod app;
+mod audio_ui;
 mod params_ui;
 mod pipeline;
 mod render;
@@ -31,6 +32,9 @@ options for render:
   --pingpong           play the input forwards, then backwards
   --audio FILE|none    audio track (default: the input's own audio)
   --audio-start SEC    skip the start of the audio track
+  --audio-gain G       level of audio modulators, 0 to 5 (default 1)
+  --audio-smoothing S  smoothing of audio modulators, 0 to 1 (default 0.5)
+  --no-reduce-noise    do not push quiet audio levels down
   --backend B          auto | software | vaapi (MP4 encoder; auto uses VAAPI if it works)
   --list               list effect ids";
 
@@ -76,6 +80,7 @@ fn cli_render(args: &[String]) -> Result<(), String> {
     let mut audio_arg: Option<String> = None;
     let mut audio_start = 0.0;
     let mut backend = "auto".to_string();
+    let mut audio_settings = phthora_audio::AudioSettings::default();
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -113,6 +118,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             "--audio" => audio_arg = Some(arg_value(args, &mut i)?),
             "--audio-start" => audio_start = parse_num(args, &mut i)?,
             "--backend" => backend = arg_value(args, &mut i)?,
+            "--audio-gain" => audio_settings.gain = parse_num(args, &mut i)? as f32,
+            "--audio-smoothing" => audio_settings.smoothing = parse_num(args, &mut i)? as f32,
+            "--no-reduce-noise" => audio_settings.reduce_noise = false,
             "--list" => {
                 use std::io::Write;
                 let mut out = std::io::stdout().lock();
@@ -138,6 +146,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         "png" => Format::Png,
         _ => return Err("output must end in .mp4, .webm, .gif or .png".into()),
     };
+    if !(0.0..=5.0).contains(&audio_settings.gain) || !(0.0..=1.0).contains(&audio_settings.smoothing) {
+        return Err("--audio-gain must be 0 to 5, --audio-smoothing 0 to 1".into());
+    }
     if !(Playback::MIN_SPEED..=Playback::MAX_SPEED).contains(&playback.speed) {
         return Err(format!("--speed must be between {} and {}", Playback::MIN_SPEED, Playback::MAX_SPEED));
     }
@@ -204,7 +215,16 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             .map(|p| AudioSource { path: p, start: playback.trim_start + audio_start, end: playback.trim_end }),
         None => None,
     };
-    let job = render::ExportJob { input, playback, effects, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, out };
+    let audio_track = match &audio {
+        Some(a) => {
+            let mut t = phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?;
+            t.start = a.start;
+            t.end = a.end;
+            Some(t)
+        }
+        None => None,
+    };
+    let job = render::ExportJob { input, playback, effects, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, out };
     let ctx = phthora_gpu::GpuContext::headless()?;
     let progress = render::Progress::default();
     let t0 = std::time::Instant::now();

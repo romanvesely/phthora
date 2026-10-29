@@ -1,5 +1,6 @@
 //! Main window.
 
+use crate::audio_ui::{AudioState, Src};
 use crate::params_ui::{self, Action, ParamCtx};
 use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
@@ -8,12 +9,11 @@ use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, Pos2, Rect, 
 use eframe::egui_wgpu;
 use phthora_core::clock::BpmTap;
 use phthora_core::history::History;
-use phthora_core::modulator::LiveInputs;
 use phthora_core::params::Value;
 use phthora_core::registry::{self, categories};
 use phthora_core::{Chain, FrameTime, OutputMode, Playback, ResolvedEffect, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Target};
-use phthora_media::{AudioSource, Backend, Format, MediaInfo, MediaKind, Quality};
+use phthora_media::{Backend, Format, MediaInfo, MediaKind, Quality};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -28,13 +28,6 @@ enum Source {
     Video(InputVideo),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AudioChoice {
-    None,
-    Input,
-    File,
-}
-
 /// A running export: worker thread, progress, start time.
 type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
 
@@ -42,8 +35,6 @@ struct ExportUi {
     open: bool,
     format: Format,
     quality: Quality,
-    audio: AudioChoice,
-    audio_file: Option<PathBuf>,
     running: Option<RunningExport>,
 }
 
@@ -74,6 +65,7 @@ pub struct PhthoraApp {
     preset_name: String,
     preset_scan: Instant,
     export: ExportUi,
+    audio: AudioState,
     settings: Settings,
     show_settings: bool,
     status: String,
@@ -127,7 +119,8 @@ impl PhthoraApp {
             preset_idx: None,
             preset_name: String::new(),
             preset_scan: Instant::now(),
-            export: ExportUi { open: false, format: Format::Mp4, quality, audio: AudioChoice::Input, audio_file: None, running: None },
+            export: ExportUi { open: false, format: Format::Mp4, quality, running: None },
+            audio: AudioState::new(settings.audio.clone()),
             settings,
             show_settings: false,
             status: String::new(),
@@ -192,8 +185,8 @@ impl PhthoraApp {
         }
         self.settings.input_dir = path.parent().map(|p| p.to_path_buf());
         self.settings.save();
-        if self.export.audio != AudioChoice::File {
-            self.export.audio = if info.has_audio { AudioChoice::Input } else { AudioChoice::None };
+        if self.audio.src == Src::None && info.has_audio {
+            self.audio.src = Src::Input;
         }
         self.input_info = Some(info);
         self.input_path = Some(path.to_path_buf());
@@ -339,13 +332,8 @@ impl PhthoraApp {
         self.settings.output_dir = out.parent().map(|p| p.to_path_buf());
         self.settings.quality = quality_name(self.export.quality).into();
         self.settings.save();
-        let audio = match self.export.audio {
-            AudioChoice::Input if self.input_audio_usable() => {
-                self.input_path.clone().map(|p| AudioSource { path: p, start: self.playback.trim_start, end: self.playback.trim_end })
-            }
-            AudioChoice::File => self.export.audio_file.clone().map(|p| AudioSource { path: p, start: 0.0, end: None }),
-            _ => None,
-        };
+        let audio = self.audio.export_source();
+        self.settings.audio = self.audio.settings.clone();
         let mut timing = self.timing;
         timing.bpm = self.use_bpm.then_some(self.bpm);
         let job = ExportJob {
@@ -361,6 +349,8 @@ impl PhthoraApp {
             quality: self.export.quality,
             backend: if self.settings.hw_encode && self.vaapi.load(Ordering::Relaxed) { Backend::Vaapi } else { Backend::Software },
             audio,
+            audio_track: self.audio.track.clone().filter(|_| self.audio.src != Src::Mic),
+            audio_settings: self.audio.settings.clone(),
             out,
         };
         let ctx = self.engine.ctx.clone();
@@ -402,13 +392,17 @@ impl PhthoraApp {
 
     fn tick(&mut self) {
         let now = Instant::now();
-        if self.playing && self.timing.mode == OutputMode::Video
+        let input_audio = self.input_audio_usable();
+        self.audio.sync(self.input_path.as_deref(), input_audio, (self.playback.trim_start, self.playback.trim_end));
+        let video_playing = self.playing && self.timing.mode == OutputMode::Video;
+        if video_playing
             && let Some(last) = self.last_tick {
                 self.play_time += now.duration_since(last).as_secs_f64();
                 if self.play_time >= self.timing.duration {
                     self.play_time %= self.timing.duration.max(0.01);
                 }
             }
+        self.audio.play(video_playing, self.play_time, self.timing.duration);
         self.last_tick = Some(now);
         let alive: HashSet<u64> = self.chain.effects.iter().map(|e| e.uid).collect();
         self.engine.retain(|u| alive.contains(&u));
@@ -416,7 +410,7 @@ impl PhthoraApp {
         let n = self.frame_index();
         let ft = timing.at_frame(n);
         self.last_ft = ft;
-        let live = LiveInputs::default();
+        let live = self.audio.inputs(n, timing.fps);
         let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &HashMap::new());
         self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
         let video = match &self.source {
@@ -574,6 +568,13 @@ impl PhthoraApp {
             if ui.button("Export…").on_hover_text("Ctrl+S").clicked() {
                 self.export.open = true;
             }
+            if ui.button("Audio").on_hover_text("Audio source, gain and bands").clicked() {
+                self.audio.open = !self.audio.open;
+            }
+            let mute = if self.audio.muted { "🔇" } else { "🔊" };
+            if ui.button(mute).on_hover_text("Mute the preview").clicked() {
+                self.audio.muted = !self.audio.muted;
+            }
             if ui.button("⚙").on_hover_text("Settings").clicked() {
                 self.show_settings = !self.show_settings;
             }
@@ -643,6 +644,7 @@ impl PhthoraApp {
         let n = self.chain.effects.len();
         let mode = self.timing.mode;
         let playhead = self.last_ft.export_progress;
+        let custom_bands = self.audio.settings.custom.len();
         if n == 0 {
             ui.add_space(12.0);
             ui.label(egui::RichText::new("No effects. Add one from the list on the left, or press Chaos.").weak());
@@ -709,7 +711,7 @@ impl PhthoraApp {
                         });
                     });
                     if e.expanded {
-                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods };
+                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands };
                         params_ui::effect_params(ui, e, &mut cx);
                     }
                 })
@@ -948,27 +950,18 @@ impl PhthoraApp {
                             ui.end_row();
                             ui.label("Audio");
                             ui.horizontal(|ui| {
-                                let has = self.input_audio_usable();
-                                if !has && self.export.audio == AudioChoice::Input {
-                                    self.export.audio = AudioChoice::None;
+                                let what = match (self.audio.export_source(), self.audio.src) {
+                                    (Some(a), _) => a.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                                    (None, Src::Mic) => "none (microphone is live only)".into(),
+                                    (None, _) if !self.audio.include_in_export && self.audio.track.is_some() => "not included".into(),
+                                    (None, _) => "none".into(),
+                                };
+                                ui.label(what);
+                                if ui.small_button("Audio…").clicked() {
+                                    self.audio.open = true;
                                 }
-                                ui.selectable_value(&mut self.export.audio, AudioChoice::None, "none");
-                                ui.add_enabled_ui(has, |ui| ui.selectable_value(&mut self.export.audio, AudioChoice::Input, "from input"));
-                                ui.selectable_value(&mut self.export.audio, AudioChoice::File, "file");
                             });
                             ui.end_row();
-                            if self.export.audio == AudioChoice::File {
-                                ui.label("");
-                                ui.horizontal(|ui| {
-                                    let name = self.export.audio_file.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "–".into());
-                                    ui.label(name);
-                                    if ui.button("Choose…").clicked()
-                                        && let Some(p) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav", "ogg", "m4a", "flac", "opus"]).pick_file() {
-                                            self.export.audio_file = Some(p);
-                                        }
-                                });
-                                ui.end_row();
-                            }
                         }
                         if self.export.format == Format::Mp4 && self.engine.background[3] < 1.0 {
                             ui.label("");
@@ -1106,11 +1099,16 @@ impl eframe::App for PhthoraApp {
         self.handle_actions(actions);
         self.settings_window(&ctx);
         self.export_window(&ctx);
+        let input_audio = self.input_audio_usable();
+        self.audio.window(&ctx, input_audio);
         // an edit is complete once the pointer is released and no text field has focus
         if !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input() {
             self.history.observe(&self.chain.effects);
         }
         // keep animating at the output frame rate
+        if self.audio.loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         if self.waiting {
             self.waiting = false;
             ctx.request_repaint_after(std::time::Duration::from_millis(4));
@@ -1120,6 +1118,8 @@ impl eframe::App for PhthoraApp {
     }
 
     fn on_exit(&mut self) {
+        self.audio.stop();
+        self.settings.audio = self.audio.settings.clone();
         self.settings.background = self.engine.background;
         self.settings.flip_x = self.engine.flip_x;
         self.settings.save();

@@ -1,6 +1,7 @@
 //! Offline rendering of an effect chain to a file (export and command line).
 
 use crate::pipeline::InputVideo;
+use phthora_audio::{AudioSettings, AudioTrack, FrameLevels};
 use phthora_core::modulator::LiveInputs;
 use phthora_core::{EffectInstance, OutputMode, Playback, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Readback};
@@ -25,6 +26,9 @@ pub struct ExportJob {
     pub quality: Quality,
     pub backend: Backend,
     pub audio: Option<AudioSource>,
+    /// analysed track for audio modulators (its used part set)
+    pub audio_track: Option<AudioTrack>,
+    pub audio_settings: AudioSettings,
     pub out: PathBuf,
 }
 
@@ -74,7 +78,7 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
         }
     }
 
-    let live = LiveInputs::default();
+    let mut levels = FrameLevels::default();
     let midi = HashMap::new();
     let mut readback = Readback::new(ctx, &engine.lib, w, h);
     let mut done = 0u64;
@@ -95,6 +99,10 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
             }
         }
         let ft = timing.at_frame(i);
+        let mut live = LiveInputs::default();
+        for (k, v) in levels.at(i, timing.fps, job.audio_track.as_ref(), &job.audio_settings).bands.iter().take(live.audio.len()).enumerate() {
+            live.audio[k] = *v;
+        }
         let resolved: Vec<_> = job.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(&ft, &live, &midi)).collect();
         engine.render(&resolved, &ft);
         if let Some(px) = readback.push(engine.output(), engine.blank()) {

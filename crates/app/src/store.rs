@@ -40,11 +40,12 @@ pub struct Settings {
     pub flip_x: bool,
     /// encode MP4 on the GPU (VAAPI) when available
     pub hw_encode: bool,
+    pub audio: phthora_audio::AudioSettings,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { output_dir: None, input_dir: None, background: [0.0, 0.0, 0.0, 1.0], quality: "high".into(), flip_x: false, hw_encode: true }
+        Self { output_dir: None, input_dir: None, background: [0.0, 0.0, 0.0, 1.0], quality: "high".into(), flip_x: false, hw_encode: true, audio: Default::default() }
     }
 }
 

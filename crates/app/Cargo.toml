@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 eframe = "0.37"
+phthora-audio = { version = "0.1.0", path = "../audio" }
 phthora-core = { path = "../core" }
 phthora-gpu = { path = "../gpu" }
 phthora-media = { path = "../media" }

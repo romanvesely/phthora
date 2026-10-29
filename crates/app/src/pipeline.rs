@@ -134,7 +134,8 @@ impl Preview {
 mod tests {
     use super::*;
     use crate::render::{render_frames, ExportJob, Progress};
-    use phthora_core::modulator::{LiveInputs, Modulator, Shape};
+    use phthora_audio::{AudioSettings, AudioTrack, FrameLevels};
+    use phthora_core::modulator::{Band, LiveInputs, Modulator, Shape};
     use phthora_core::{Chain, Direction, TimingSettings};
     use phthora_gpu::GpuContext;
     use phthora_media::{Backend, Format, Quality};
@@ -165,6 +166,14 @@ mod tests {
             "amount".into(),
             Modulator { enabled: true, shape: Shape::Keys, keyframes: vec![[0.0, 0.0], [0.5, 1.0], [1.0, 0.2]], seed: 1.0, ..Default::default() },
         );
+        // an audio-driven parameter on the first effect
+        let fb = chain.effects[0].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
+        chain.effects[0].modulators.insert(fb, Modulator { enabled: true, shape: Shape::Audio, band: Band::Low, seed: 2.0, ..Default::default() });
+        let pcm: Vec<f32> = (0..44100 * 2).map(|i| (i as f32 * 0.012).sin() * ((i / 4000) % 3) as f32 * 0.4).collect();
+        let mut track = AudioTrack::from_pcm(pcm);
+        track.start = 0.3;
+        track.end = Some(1.2);
+        let audio_settings = AudioSettings { smoothing: 0.7, ..Default::default() };
         let playback = Playback { trim_start: 0.25, trim_end: Some(1.5), speed: 1.5, direction: Direction::PingPong };
         let timing = TimingSettings { duration: 2.5, fps: 12.0, ..Default::default() };
         let (w, h) = (96, 54);
@@ -181,6 +190,8 @@ mod tests {
             quality: Quality::Low,
             backend: Backend::Software,
             audio: None,
+            audio_track: Some(track.clone()),
+            audio_settings: audio_settings.clone(),
             out: dir.join("unused.mp4"),
         };
         let ctx = GpuContext::headless().expect("gpu");
@@ -201,10 +212,17 @@ mod tests {
         let info = phthora_media::probe(&src).unwrap();
         let video = InputVideo::open(&src, &info, (w, h), playback);
         let mut preview = Preview::default();
+        let mut levels = FrameLevels::default();
+        let mut audio_moved = false;
         for n in 0..total {
             let ft = timing.at_frame(n);
+            let mut live = LiveInputs::default();
+            for (k, v) in levels.at(n, timing.fps, Some(&track), &audio_settings).bands.iter().take(4).enumerate() {
+                live.audio[k] = *v;
+            }
+            audio_moved |= live.audio[1] > 0.05;
             loop {
-                let fx = chain.resolve(&ft, &LiveInputs::default(), &HashMap::new());
+                let fx = chain.resolve(&ft, &live, &HashMap::new());
                 match preview.step(&mut engine, Some(&video), n, &timing, fx) {
                     Step::Rendered => break,
                     Step::Waiting => std::thread::sleep(std::time::Duration::from_millis(1)),
@@ -212,12 +230,13 @@ mod tests {
                 }
             }
             // a repaint without changes does not render again (history would advance)
-            let fx = chain.resolve(&ft, &LiveInputs::default(), &HashMap::new());
+            let fx = chain.resolve(&ft, &live, &HashMap::new());
             assert_eq!(preview.step(&mut engine, Some(&video), n, &timing, fx), Step::Unchanged);
             let mut px = engine.read_output();
             phthora_gpu::context::unpremultiply(&mut px);
             assert!(px == exported[n as usize], "preview frame {n} differs from the export");
         }
+        assert!(audio_moved, "the audio modulator never moved");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
