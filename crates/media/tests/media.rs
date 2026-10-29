@@ -566,3 +566,22 @@ fn clip_reader_prefetches_without_blocking() {
     // past the real end: the last frame
     assert!(clip.get_blocking(999, &[]).is_some());
 }
+
+#[test]
+fn decode_audio_mono_average() {
+    let t = Tmp::new("pcm");
+    let p = t.p("stereo.wav");
+    // left: 0.5 constant-ish sine, right: silence -> mono is half the left channel
+    ff(&["-f", "lavfi", "-i", "sine=f=441:r=44100:d=0.5", "-af", "pan=stereo|c0=c0|c1=0*c0", "-c:a", "pcm_f32le", p.to_str().unwrap()]);
+    let mono = decode_audio(&p, 44100).unwrap();
+    let left = decode_audio(&{
+        let q = t.p("left.wav");
+        ff(&["-f", "lavfi", "-i", "sine=f=441:r=44100:d=0.5", "-c:a", "pcm_f32le", q.to_str().unwrap()]);
+        q
+    }, 44100)
+    .unwrap();
+    assert_eq!(mono.len(), 22050);
+    let peak_m = mono.iter().fold(0f32, |a, v| a.max(v.abs()));
+    let peak_l = left.iter().fold(0f32, |a, v| a.max(v.abs()));
+    assert!((peak_m / peak_l - 0.5).abs() < 0.01, "mono {peak_m} left {peak_l}");
+}
