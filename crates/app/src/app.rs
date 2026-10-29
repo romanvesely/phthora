@@ -1,6 +1,8 @@
 //! Main window.
 
 use crate::audio_ui::{AudioState, Src};
+use crate::batch::{self, AudioChoice, BackendPref};
+use crate::batch_ui::{self, BatchUi};
 use phthora_audio::{MidiIn, MidiValues};
 use phthora_gpu::paint::{self, PaintCanvas, PaintKind};
 use phthora_core::orbit::{self, Orbit};
@@ -160,6 +162,7 @@ pub struct PhthoraApp {
     preset_name: String,
     preset_scan: Instant,
     export: ExportUi,
+    batch: BatchUi,
     audio: AudioState,
     settings: Settings,
     show_settings: bool,
@@ -245,6 +248,7 @@ impl PhthoraApp {
                 let still = remembered(&settings.export_still_format, true, Format::Png);
                 ExportUi { open: false, format: video, video, still, quality, match_input: settings.export_match_input, lock: false, audio_start: 0.0, running: None }
             },
+            batch: BatchUi::new(),
             audio: AudioState::new(settings.audio.clone()),
             settings,
             show_settings: false,
@@ -686,7 +690,7 @@ impl PhthoraApp {
     }
 
     fn start_export(&mut self) {
-        if self.export.running.is_some() {
+        if self.export.running.is_some() || self.batch.running.is_some() {
             return;
         }
         let params = self.export_params();
@@ -738,6 +742,77 @@ impl PhthoraApp {
         let p2 = progress.clone();
         let handle = std::thread::spawn(move || render::run(&ctx, &job, &p2));
         self.export.running = Some((handle, progress, Instant::now()));
+    }
+
+    // ------------------------------------------------------------ batch export
+
+    fn open_batch(&mut self) {
+        let video = if self.export.video.is_still() { Format::Mp4 } else { self.export.video };
+        self.batch.open_with(batch_ui::Defaults { size: self.out_size, duration: self.timing.duration, fps: self.timing.fps, format: video, out_dir: self.settings.export_dir() });
+    }
+
+    /// Draw the batch window and carry out what it asks for.
+    fn batch_window(&mut self, ctx: &egui::Context) {
+        match self.batch.show(ctx, self.export.running.is_none()) {
+            Some(batch_ui::Cmd::Start) => self.start_batch(),
+            Some(batch_ui::Cmd::Cancel) => {
+                if let Some(r) = &self.batch.running {
+                    r.progress.cancel();
+                }
+            }
+            Some(batch_ui::Cmd::OpenFolder(d)) => open_path(&d),
+            None => {}
+        }
+        // files dropped on the window go into its list instead of the editor
+        if self.batch.wants_drop(ctx) {
+            let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+            self.batch.add(dropped);
+        }
+    }
+
+    /// Run the chain over every file of the batch window, in the background.
+    fn start_batch(&mut self) {
+        if self.batch.running.is_some() || self.export.running.is_some() {
+            return;
+        }
+        let Some(out_dir) = self.batch.out_dir.clone() else { return };
+        let files = self.batch.files.clone();
+        let ov = self.batch.overrides();
+        self.settings.output_dir = Some(out_dir.clone());
+        self.settings.save();
+        let shared = batch::Shared {
+            chain: self.chain.clone(),
+            playback: Playback { speed: self.playback.speed, direction: self.playback.direction, ..Default::default() },
+            bpm: self.use_bpm.then_some(self.bpm),
+            background: self.engine.background,
+            flip_x: self.engine.flip_x,
+            quality: self.export.quality,
+            backend: if self.settings.hw_encode && self.vaapi.load(Ordering::Relaxed) { BackendPref::Vaapi } else { BackendPref::Software },
+            audio: AudioChoice::Input,
+            audio_start: 0.0,
+            audio_settings: self.audio.settings.clone(),
+            midi: self.midi_values.clone(),
+        };
+        let ctx = self.engine.ctx.clone();
+        let progress = batch::BatchProgress::default();
+        let p2 = progress.clone();
+        let handle = std::thread::spawn(move || batch::run_batch(&ctx, &files, &out_dir, &shared, &ov, &p2, |_| {}));
+        self.batch.report = None;
+        self.batch.running = Some(batch_ui::Running { handle, progress, started: Instant::now() });
+    }
+
+    fn poll_batch(&mut self) {
+        if !self.batch.running.as_ref().is_some_and(|r| r.handle.is_finished()) {
+            return;
+        }
+        let r = self.batch.running.take().unwrap();
+        match r.handle.join() {
+            Ok(report) => {
+                let line = self.batch.finish(report);
+                self.notify(format!("Batch export: {line}"));
+            }
+            Err(_) => self.notify("Batch export crashed"),
+        }
     }
 
     fn poll_export(&mut self) {
@@ -1020,6 +1095,8 @@ impl PhthoraApp {
                 self.show_about = false;
             } else if self.export.open && self.export.running.is_none() {
                 self.export.open = false;
+            } else if self.batch.open && self.batch.running.is_none() {
+                self.batch.open = false;
             } else if self.show_settings {
                 self.show_settings = false;
             } else if self.audio.open {
@@ -1110,6 +1187,9 @@ impl PhthoraApp {
                 }
                 if ui.button("Open preset folder").clicked() {
                     open_path(&store::preset_dir());
+                }
+                if ui.button("Batch export…").on_hover_text("The same effects on several files").clicked() {
+                    self.open_batch();
                 }
                 if ui.button("Open output folder").clicked() {
                     open_path(&self.settings.export_dir());
@@ -2075,6 +2155,9 @@ impl PhthoraApp {
                 if let Some((_, p, _)) = &self.export.running {
                     p.cancel.store(true, Ordering::Relaxed);
                 }
+                if let Some(r) = &self.batch.running {
+                    r.progress.cancel();
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             None => {}
@@ -2225,7 +2308,7 @@ impl eframe::App for PhthoraApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // dropped files
-        let dropped: Option<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| { let p = f.path(); (!p.as_os_str().is_empty()).then(|| p.to_path_buf()) }));
+        let dropped: Option<PathBuf> = if self.batch.wants_drop(&ctx) { None } else { ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| { let p = f.path(); (!p.as_os_str().is_empty()).then(|| p.to_path_buf()) })) };
         if let Some(p) = dropped {
             if p.to_string_lossy().ends_with(store::PRESET_EXT) {
                 if let Ok(s) = std::fs::read_to_string(&p)
@@ -2243,6 +2326,7 @@ impl eframe::App for PhthoraApp {
         }
         self.shortcuts(&ctx);
         self.poll_export();
+        self.poll_batch();
         self.tick();
 
         egui::Panel::top("top").show(ui, |ui| {
@@ -2278,7 +2362,7 @@ impl eframe::App for PhthoraApp {
             self.preview(ui);
         });
         self.handle_actions(actions);
-        if ctx.input(|i| i.viewport().close_requested()) && self.export.running.is_some() && !self.quit_ok {
+        if ctx.input(|i| i.viewport().close_requested()) && (self.export.running.is_some() || self.batch.running.is_some()) && !self.quit_ok {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.dialog = Some(Dialog::Confirm { text: "An export is running. Quit and cancel it?".into(), yes: "Quit", action: Confirm::Quit });
         }
@@ -2298,6 +2382,7 @@ impl eframe::App for PhthoraApp {
         self.popout_window(&ctx);
         self.settings_window(&ctx);
         self.export_window(&ctx);
+        self.batch_window(&ctx);
         let input_audio = self.input_audio_usable();
         self.audio.window(&ctx, input_audio);
         // an edit is complete once the pointer is released and no text field has focus

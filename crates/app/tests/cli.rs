@@ -193,7 +193,7 @@ fn help_lists_the_options() {
         assert!(out.status.success(), "{args:?}");
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(text.contains("--audio FILE|none"), "{args:?}");
-        for word in [".webp", ".apng", ".jpg", "%05d", "PNG sequence"] {
+        for word in [".webp", ".apng", ".jpg", "%05d", "PNG sequence", "--out-dir DIR", "--format EXT"] {
             assert!(text.contains(word), "{args:?} does not mention {word}");
         }
     }
@@ -328,4 +328,114 @@ fn caption_uses_fonts_from_the_fonts_folder() {
     // a font that is gone falls back to the default
     let (gone, _) = render("Gone");
     assert_eq!(gone, sans);
+}
+
+/// A small test clip or image made by ffmpeg.
+fn make_media(path: &Path, source: &str, extra: &[&str]) {
+    let st = Command::new("ffmpeg").args(["-v", "error", "-y", "-f", "lavfi", "-i", source]).args(extra).arg(path).status().unwrap();
+    assert!(st.success(), "ffmpeg could not make {}", path.display());
+}
+
+fn listing(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    v.sort();
+    v
+}
+
+#[test]
+fn batch_renders_every_input_with_its_own_size_and_format() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("batch");
+    let (a, b, c) = (d.join("a.mp4"), d.join("b.webm"), d.join("c.png"));
+    make_media(&a, "testsrc2=size=96x54:rate=10:duration=1", &["-pix_fmt", "yuv420p"]);
+    make_media(&b, "testsrc2=size=64x36:rate=5:duration=2", &["-c:v", "libvpx-vp9"]);
+    make_media(&c, "testsrc2=size=80x48:rate=1", &["-frames:v", "1"]);
+    let out_dir = d.join("out");
+    let res = run(bin().arg("render").args([&a, &b, &c]).args(["--effect", "pixelate", "--quality", "low", "--backend", "software", "--out-dir"]).arg(&out_dir));
+    let log = String::from_utf8_lossy(&res.stderr);
+    assert!(log.contains("[1/3]") && log.contains("[3/3]") && log.contains("3 of 3 exported"), "{log}");
+    let names = listing(&out_dir);
+    assert_eq!(names.len(), 3, "{names:?}");
+    let find = |stem: &str, ext: &str| out_dir.join(names.iter().find(|n| n.starts_with(&format!("{stem}-phthora-")) && n.ends_with(ext)).unwrap_or_else(|| panic!("no {stem}*{ext} in {names:?}")));
+    // each output has the size, length and frame rate of its own input
+    let info = probe(&find("a", ".mp4"), "stream=codec_name,width,height,nb_read_frames");
+    assert!(info.contains("codec_name=h264") && info.contains("width=96") && info.contains("height=54") && info.contains("nb_read_frames=10"), "{info}");
+    let info = probe(&find("b", ".webm"), "stream=codec_name,width,height,nb_read_frames,r_frame_rate");
+    assert!(info.contains("codec_name=vp9") && info.contains("width=64") && info.contains("height=36") && info.contains("nb_read_frames=10") && info.contains("r_frame_rate=5/1"), "{info}");
+    let info = probe(&find("c", ".png"), "stream=codec_name,width,height,nb_read_frames");
+    assert!(info.contains("codec_name=png") && info.contains("width=80") && info.contains("height=48") && info.contains("nb_read_frames=1"), "{info}");
+
+    // a second run into the same folder never overwrites: same stems, new names
+    let before = names.clone();
+    run(bin().arg("render").args([&a, &b, &c]).args(["--effect", "pixelate", "--quality", "low", "--backend", "software", "--out-dir"]).arg(&out_dir));
+    let after = listing(&out_dir);
+    assert_eq!(after.len(), 6, "{after:?}");
+    assert!(before.iter().all(|n| after.contains(n)));
+
+    // --format and the overrides hold for all inputs
+    let gif_dir = d.join("gifs");
+    run(bin().arg("render").args([&a, &c]).args(["--effect", "pixelate", "--format", "gif", "--size", "48x28", "--duration", "0.5", "--fps", "10", "--out-dir"]).arg(&gif_dir));
+    let gifs = listing(&gif_dir);
+    assert_eq!(gifs.len(), 2);
+    for g in &gifs {
+        let info = probe(&gif_dir.join(g), "stream=codec_name,width,height,nb_read_frames");
+        assert!(g.ends_with(".gif") && info.contains("codec_name=gif") && info.contains("width=48") && info.contains("height=28") && info.contains("nb_read_frames=5"), "{g}: {info}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn batch_goes_on_after_a_broken_input_and_fails_at_the_end() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("batch-bad");
+    let (good1, bad, missing, good2) = (d.join("one.mp4"), d.join("broken.mp4"), d.join("missing.mp4"), d.join("two.mp4"));
+    make_media(&good1, "testsrc2=size=64x36:rate=10:duration=1", &["-pix_fmt", "yuv420p"]);
+    make_media(&good2, "testsrc2=size=64x36:rate=10:duration=1", &["-pix_fmt", "yuv420p"]);
+    std::fs::write(&bad, b"this is not a video").unwrap();
+    let out_dir = d.join("out");
+    let out = bin()
+        .arg("render")
+        .args([&good1, &bad, &missing, &good2])
+        .args(["--effect", "pixelate", "--quality", "low", "--backend", "software", "--out-dir"])
+        .arg(&out_dir)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a failed input must give a failing exit status:\n{log}");
+    assert_eq!(out.status.code(), Some(1));
+    // the inputs around the broken ones were rendered
+    let names = listing(&out_dir);
+    assert_eq!(names.len(), 2, "{names:?}\n{log}");
+    assert!(names.iter().any(|n| n.starts_with("one-phthora-")) && names.iter().any(|n| n.starts_with("two-phthora-")), "{names:?}");
+    // the error list names every failure, the progress lines say where it happened
+    assert!(log.contains("2 of 4 inputs failed") && log.contains("broken.mp4") && log.contains("missing.mp4"), "{log}");
+    assert!(log.contains("[2/4] FAILED") && log.contains("[4/4] wrote"), "{log}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn batch_arguments_are_checked() {
+    let d = tmp_dir("batch-args");
+    let dir = d.to_str().unwrap();
+    let err = |args: &[&str]| {
+        let out = bin().arg("render").args(args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} was accepted");
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+    // several inputs need a folder, and --out names one file
+    assert!(err(&["a.mp4", "b.mp4", "--effect", "pixelate"]).contains("--out-dir"));
+    assert!(err(&["a.mp4", "b.mp4", "--out", "x.mp4"]).contains("--out-dir"));
+    assert!(err(&["a.mp4", "--out", "x.mp4", "--out-dir", dir]).contains("--out-dir"));
+    assert!(err(&["--out-dir", dir]).contains("at least one input"));
+    assert!(err(&["a.mp4", "--format", "mp4", "--out", "x.mp4"]).contains("--format"));
+    assert!(err(&["a.mp4", "b.mp4", "--format", "mov", "--out-dir", dir]).contains("unknown --format"));
+    // nothing was written for rejected arguments
+    assert!(listing(&d).is_empty());
+    let _ = std::fs::remove_dir_all(&d);
 }

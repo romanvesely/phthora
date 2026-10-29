@@ -26,7 +26,7 @@ pub use encoder::{AudioSource, Backend, EncodeSettings, Encoder, Format, Quality
 pub use error::{MediaError, Result};
 pub use image::{RgbaImage, load_image};
 pub use live::{LiveSource, Record, VideoDevice, VirtualCam, list_devices};
-pub use name::{default_export_name, export_name_at};
+pub use name::{default_export_name, export_name_at, unique_export_path, unique_export_path_at};
 pub use probe::{MediaInfo, MediaKind, count_frames, probe};
 pub use size::fit_size;
 pub use util::ffmpeg_available;

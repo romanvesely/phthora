@@ -2,19 +2,24 @@
 
 mod app;
 mod audio_ui;
+mod batch;
+mod batch_ui;
 mod params_ui;
 mod pipeline;
 mod render;
 mod store;
 mod video;
 
-use phthora_core::{ClipTiming, Direction, EffectInstance, OutputMode, Playback, TimingSettings};
-use phthora_media::{AudioSource, Backend, Format, Quality};
+use batch::{AudioChoice, BackendPref, Overrides, Shared};
+use phthora_core::{Direction, EffectInstance, Playback};
+use phthora_media::{Format, Quality};
 use std::path::PathBuf;
 
 const USAGE: &str = "usage:
   phthora [FILE]                     open the editor (optionally with an image or video)
   phthora render [INPUT] [options]   render without a window
+  phthora render INPUT... --out-dir DIR [options]
+                                     render several inputs one after the other, see batch below
 options for render:
   --preset FILE        effect chain (.phthora.json)
   --effect ID,...      add effects with default settings (see --list)
@@ -41,7 +46,16 @@ options for render:
   --audio-smoothing S  smoothing of audio modulators, 0 to 1 (default 0.5)
   --no-reduce-noise    do not push quiet audio levels down
   --backend B          auto | software | vaapi (MP4 encoder; auto uses VAAPI if it works)
-  --list               list effect ids";
+  --list               list effect ids
+batch (several inputs, or --out-dir with one):
+  --out-dir DIR        folder for the results (created if missing), instead of --out. Every input is
+                       written as <name>-phthora-<date>-<time>.<ext>; no existing file is overwritten.
+  --format EXT         one format for all: mp4 webm gif webp apng png jpg seq (a PNG sequence folder).
+                       Default: each input's own container where phthora can write it (mp4, webm, gif,
+                       webp, png, jpg), else mp4 for video and png for stills.
+  Size, length and frame rate come from each input; --size, --duration and --fps then hold for all.
+  An input that fails does not stop the others; the failures are listed at the end and the exit
+  status is 1. Progress per file goes to stderr. Use shell globs for many files: phthora render *.mp4 --out-dir out";
 
 fn arg_value(args: &[String], i: &mut usize) -> Result<String, String> {
     *i += 1;
@@ -79,7 +93,9 @@ fn output_format(out: &std::path::Path, animated: bool) -> Result<Format, String
 }
 
 fn cli_render(args: &[String]) -> Result<(), String> {
-    let mut input: Option<PathBuf> = None;
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    let mut out_dir: Option<PathBuf> = None;
+    let mut format_arg: Option<Format> = None;
     let mut preset: Option<PathBuf> = None;
     let mut effects_arg: Vec<String> = Vec::new();
     let mut out: Option<PathBuf> = None;
@@ -102,6 +118,11 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             "--preset" => preset = Some(arg_value(args, &mut i)?.into()),
             "--effect" => effects_arg.extend(arg_value(args, &mut i)?.split(',').map(|s| s.trim().to_string())),
             "--out" => out = Some(arg_value(args, &mut i)?.into()),
+            "--out-dir" => out_dir = Some(arg_value(args, &mut i)?.into()),
+            "--format" => {
+                let v = arg_value(args, &mut i)?;
+                format_arg = Some(batch::parse_format(&v).ok_or_else(|| format!("unknown --format {v}, use mp4, webm, gif, webp, apng, png, jpg or seq"))?);
+            }
             "--duration" => duration = Some(parse_num(args, &mut i)?),
             "--fps" => fps = Some(parse_num(args, &mut i)?),
             "--bpm" => bpm = Some(parse_num(args, &mut i)?),
@@ -151,11 +172,26 @@ fn cli_render(args: &[String]) -> Result<(), String> {
                 return Ok(());
             }
             _ if a.starts_with("--") => return Err(format!("unknown option {a}\n{USAGE}")),
-            _ => input = Some(a.into()),
+            _ => inputs.push(a.into()),
         }
         i += 1;
     }
-    let out = out.ok_or("--out is required")?;
+    let batch_mode = out_dir.is_some() || inputs.len() > 1;
+    if batch_mode {
+        if out.is_some() {
+            return Err("--out names one file: with several inputs or --out-dir use --out-dir only".into());
+        }
+        if out_dir.is_none() {
+            return Err("several inputs need --out-dir DIR for the results".into());
+        }
+        if inputs.is_empty() {
+            return Err("--out-dir needs at least one input".into());
+        }
+    } else if out.is_none() {
+        return Err("--out is required".into());
+    } else if format_arg.is_some() {
+        return Err("--format is for --out-dir; with --out the format follows the file name".into());
+    }
     if !(0.0..=5.0).contains(&audio_settings.gain) || !(0.0..=1.0).contains(&audio_settings.smoothing) {
         return Err("--audio-gain must be 0 to 5, --audio-smoothing 0 to 1".into());
     }
@@ -194,69 +230,68 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         e.enabled = true;
         chain.effects.push(e);
     }
+    let shared = Shared {
+        chain,
+        playback,
+        bpm,
+        background,
+        flip_x,
+        quality,
+        backend: match backend.as_str() {
+            "software" => BackendPref::Software,
+            "vaapi" => BackendPref::Vaapi,
+            _ => BackendPref::Auto,
+        },
+        audio: match audio_arg.as_deref() {
+            Some("none") => AudioChoice::None,
+            Some(f) => AudioChoice::File(f.into()),
+            None => AudioChoice::Input,
+        },
+        audio_start,
+        audio_settings,
+        midi: Default::default(),
+    };
+    let ov = Overrides { size, duration, fps, format: format_arg };
+    if batch_mode {
+        return cli_batch(&inputs, &out_dir.expect("checked above"), &shared, &ov);
+    }
+    let (input, out) = (inputs.first().cloned(), out.expect("checked above"));
     let info = match &input {
         Some(p) => Some(phthora_media::probe(p).map_err(|e| e.to_string())?),
         None => None,
     };
     let moving_input = info.as_ref().is_some_and(|i| i.kind != phthora_media::MediaKind::Image);
     let format = output_format(&out, moving_input || duration.is_some() || fps.is_some())?;
-    let backend = match (backend.as_str(), format) {
-        (_, f) if f != Format::Mp4 => Backend::Software,
-        ("software", _) => Backend::Software,
-        ("vaapi", _) => {
-            if !phthora_media::vaapi_available() {
-                return Err("--backend vaapi: no working VAAPI H.264 encoder found".into());
-            }
-            Backend::Vaapi
-        }
-        _ => if phthora_media::vaapi_available() { Backend::Vaapi } else { Backend::Software },
-    };
-    if backend == Backend::Software
-        && let Some(enc) = phthora_media::missing_encoder(format) {
-            return Err(format!("this ffmpeg has no {} encoder ({enc}), cannot write {}", format.label(), out.display()));
-        }
-    let (w, h) = size.unwrap_or_else(|| info.as_ref().map(|i| phthora_media::fit_size(i.width, i.height, 4096)).unwrap_or((1280, 720)));
-    let video = info.as_ref().filter(|i| i.kind != phthora_media::MediaKind::Image && i.duration > 0.0);
-    let clip = video.map(|i| ClipTiming { fps: if i.fps > 0.0 { i.fps } else { 30.0 }, frames: ((i.duration * if i.fps > 0.0 { i.fps } else { 30.0 }).round() as u64).max(1) });
-    let in_dur = clip.map(|c| playback.natural_duration(c));
-    let in_fps = video.filter(|i| i.fps > 0.0).map(|i| i.fps.round().clamp(1.0, 120.0));
-    let mut timing = TimingSettings {
-        mode: if format.is_still() { OutputMode::Image } else { OutputMode::Video },
-        duration: duration.or(in_dur).unwrap_or(4.0).clamp(0.05, 3600.0),
-        fps: fps.or(in_fps).unwrap_or(30.0),
-        bpm,
-    };
-    let capped = render::format_fps(format, timing.fps);
-    if capped < timing.fps {
-        eprintln!("note: {} takes at most {capped} fps, using {capped}", format.label());
-        timing.fps = capped;
+    let built = batch::build_job(&shared, &ov, input.as_deref(), info.as_ref(), format, out)?;
+    if let Some(n) = &built.note {
+        eprintln!("note: {n}");
     }
-    // the input's own audio follows the trim; reversed or sped-up input has no matching audio
-    let audio = match audio_arg.as_deref() {
-        Some("none") => None,
-        Some(f) => Some(AudioSource { path: f.into(), start: audio_start, end: None }),
-        None if playback.speed == 1.0 && playback.direction == Direction::Forward => video
-            .filter(|i| i.has_audio)
-            .and(input.clone())
-            .map(|p| AudioSource { path: p, start: playback.trim_start + audio_start, end: playback.trim_end }),
-        None => None,
-    };
-    let audio_track = match &audio {
-        Some(a) => {
-            let mut t = phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?;
-            t.start = a.start;
-            t.end = a.end;
-            Some(t)
-        }
-        None => None,
-    };
-    let job = render::ExportJob { input, playback, chain, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, midi: Default::default(), out };
     let ctx = phthora_gpu::GpuContext::headless()?;
     let progress = render::Progress::default();
     let t0 = std::time::Instant::now();
-    let p = render::run(&ctx, &job, &progress)?;
+    let p = render::run(&ctx, &built.job, &progress)?;
     eprintln!("wrote {} ({} frames, {:.1} s)", p.display(), progress.done.load(std::sync::atomic::Ordering::Relaxed), t0.elapsed().as_secs_f32());
     Ok(())
+}
+
+/// `phthora render A B C --out-dir DIR`: every input with the same chain, progress per file on stderr.
+fn cli_batch(inputs: &[PathBuf], out_dir: &std::path::Path, shared: &Shared, ov: &Overrides) -> Result<(), String> {
+    use batch::Event;
+    let ctx = phthora_gpu::GpuContext::headless()?;
+    let progress = batch::BatchProgress::default();
+    let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let report = batch::run_batch(&ctx, inputs, out_dir, shared, ov, &progress, |e| match e {
+        Event::Start { index, total, input } => eprintln!("[{index}/{total}] {} ...", input.display()),
+        Event::Note(n) => eprintln!("note: {n}"),
+        Event::Done { index, total, out, frames, secs } => eprintln!("[{index}/{total}] wrote {} ({frames} frames, {secs:.1} s)", out.display()),
+        Event::Failed { index, total, input, error } => eprintln!("[{index}/{total}] FAILED {}: {}", name(input), error.lines().last().unwrap_or(error)),
+    });
+    eprintln!("{} of {} exported to {}", report.done.len(), inputs.len(), out_dir.display());
+    if report.failed.is_empty() {
+        return Ok(());
+    }
+    let list: Vec<String> = report.failed.iter().map(|f| format!("  {}: {}", f.input.display(), f.error.lines().last().unwrap_or(&f.error))).collect();
+    Err(format!("{} of {} inputs failed:\n{}", report.failed.len(), inputs.len(), list.join("\n")))
 }
 
 fn main() {
