@@ -32,6 +32,8 @@ pub struct Engine {
     pub assets: Assets,
     /// log-frequency audio spectrum for the next render (audio visualizer)
     pub audio_spectrum: Vec<f32>,
+    /// live drawing canvases by effect uid
+    pub paint: HashMap<u64, crate::paint::PaintCanvas>,
     last_output: Option<u64>,
 }
 
@@ -54,6 +56,7 @@ impl Engine {
             flip_x: false,
             assets: Assets::new(),
             audio_spectrum: Vec::new(),
+            paint: HashMap::new(),
             last_output: None,
         }
     }
@@ -152,6 +155,7 @@ impl Engine {
                     blank: &self.blank,
                     assets: &mut self.assets,
                     audio: &self.audio_spectrum,
+                    paint: &self.paint,
                 };
                 slot.effect.render(&mut rc, e, input, orig, &slot.out);
             }

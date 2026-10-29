@@ -27,6 +27,8 @@ pub struct RenderCtx<'a> {
     pub assets: &'a mut Assets,
     /// log-frequency audio spectrum of this frame, 0..1 (empty without audio)
     pub audio: &'a [f32],
+    /// live drawing canvases by effect uid (the editor); without one the effect's data is used
+    pub paint: &'a std::collections::HashMap<u64, crate::paint::PaintCanvas>,
 }
 
 pub trait GpuEffect {

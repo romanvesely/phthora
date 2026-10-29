@@ -4,6 +4,7 @@ pub mod assets;
 pub mod context;
 pub mod effects;
 pub mod engine;
+pub mod paint;
 pub mod readback;
 pub mod shader;
 pub mod text;

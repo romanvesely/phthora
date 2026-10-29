@@ -179,3 +179,67 @@ fn audio_visualizer_draws_the_spectrum() {
     assert!(lit(&px, 0, w, 0, h) > 100);
     assert_eq!(lit(&px, w / 2 - 5, w / 2 + 5, h / 2 - 5, h / 2 + 5), 0, "inner circle stays empty");
 }
+
+#[test]
+fn drawing_effects_use_the_canvas() {
+    use phthora_gpu::paint::{PaintCanvas, PaintKind, DATA_KEY};
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (160, 90);
+    let img = test_image(w, h);
+    let mut engine = Engine::new(&ctx, w, h);
+    engine.set_source_rgba(w, h, &img);
+    let ts = TimingSettings::default();
+    let t = ts.at_frame(0);
+    let none = HashMap::new();
+    let li = LiveInputs::default();
+
+    // mask draw under solarize: painted pixels show the image without the effect
+    let sol = EffectInstance::by_id("solarize").unwrap();
+    let mut md = EffectInstance::by_id("mask_draw").unwrap();
+    let mut canvas = PaintCanvas::new(PaintKind::Mask, w, h);
+    for _ in 0..40 {
+        for y in (0..h).step_by(2) {
+            for x in (0..w / 2).step_by(2) {
+                canvas.dab(x as f32, y as f32, (0.0, 0.0), false);
+            }
+        }
+    }
+    let fx = |md: &EffectInstance| vec![sol.resolve(&t, &li, &none), md.resolve(&t, &li, &none)];
+    engine.render(&fx(&md), &t);
+    let blank_mask = engine.read_output();
+    engine.paint.insert(md.uid, canvas);
+    engine.render(&fx(&md), &t);
+    let live = engine.read_output();
+    let at = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4) as usize..][..3].to_vec();
+    // the painted mask saturates a level or two below full (8-bit blending)
+    let close = |a: Vec<u8>, b: Vec<u8>| a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 2);
+    assert!(close(at(&live, 20, 45), at(&img, 20, 45)), "painted: original image");
+    assert_eq!(at(&live, 140, 45), at(&blank_mask, 140, 45), "unpainted: effect");
+    assert_ne!(at(&blank_mask, 20, 45), at(&img, 20, 45));
+    // the same drawing from the preset data renders identically without a live canvas
+    md.data.insert(DATA_KEY.into(), engine.paint[&md.uid].to_data_url());
+    let mut export = Engine::new(&ctx, w, h);
+    export.set_source_rgba(w, h, &img);
+    export.render(&fx(&md), &t);
+    assert!(export.read_output() == live, "stored drawing differs from the live canvas");
+
+    // push draw: a stroke moves pixels only where it was drawn
+    let pd = EffectInstance::by_id("push_draw").unwrap();
+    let r = pd.resolve(&t, &li, &none);
+    engine.render(std::slice::from_ref(&r), &t);
+    // an empty canvas (128 = 0.502) shifts by a twelfth of a pixel, like the reference
+    let out = engine.read_output();
+    let mean = out.iter().zip(&img).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / out.len() as f64;
+    assert!(mean < 1.0, "an empty push canvas barely changes the image: {mean}");
+    let mut canvas = PaintCanvas::new(PaintKind::Push, w, h);
+    for _ in 0..60 {
+        for x in 0..40 {
+            canvas.dab(40.0 + x as f32 * 2.0, 45.0, (3.0, 0.0), false);
+        }
+    }
+    engine.paint.insert(pd.uid, canvas);
+    engine.render(std::slice::from_ref(&r), &t);
+    let pushed = engine.read_output();
+    assert_ne!(at(&pushed, 80, 45), at(&img, 80, 45), "stroke displaces");
+    assert_eq!(at(&pushed, 80, 10), at(&out, 80, 10), "outside the stroke nothing moves");
+}

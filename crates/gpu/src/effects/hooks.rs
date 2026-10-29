@@ -21,6 +21,7 @@ pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn Shade
         "ascii" => Box::new(Ascii::default()),
         "caption" => Box::new(Caption::default()),
         "audio_visualizer" => Box::new(Visualizer::default()),
+        "push_draw" | "mask_draw" => Box::new(PaintTex { kind: crate::paint::PaintKind::of(&desc.id)?, uploaded: None, tex: None, seed: 0.0 }),
         _ => return None,
     })
 }
@@ -569,5 +570,56 @@ impl ShaderHook for Visualizer {
     }
     fn texture(&self, name: &str) -> Option<TexInput<'_>> {
         (name == "barsTexture").then(|| self.tex.as_ref().map(|t| tex(t, SamplerKind::LinearClamp))).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- Drawing effects
+
+/// The drawing canvas as `tMask`: the editor's live canvas, or the one stored in the effect.
+struct PaintTex {
+    kind: crate::paint::PaintKind,
+    /// what the texture shows: live canvas version, or a hash of the stored data URL
+    uploaded: Option<(bool, u64, (u32, u32))>,
+    tex: Option<Rc<Target>>,
+    seed: f32,
+}
+
+impl ShaderHook for PaintTex {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        use crate::paint::{PaintCanvas, DATA_KEY};
+        use std::hash::{Hash, Hasher};
+        self.seed = (sub_seed(e.seed, 5) * 100.0) as f32;
+        let size = (rc.width, rc.height);
+        let (key, rgba) = match rc.paint.get(&e.uid) {
+            Some(c) => {
+                let key = (true, c.version, c.size());
+                (key, (self.uploaded != Some(key)).then(|| (c.size(), c.rgba())))
+            }
+            None => {
+                let url = e.data.get(DATA_KEY).map(String::as_str).unwrap_or("");
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                url.hash(&mut h);
+                let key = (false, h.finish(), size);
+                (key, (self.uploaded != Some(key)).then(|| {
+                    let mut c = PaintCanvas::new(self.kind, size.0, size.1);
+                    c.load_data_url(url);
+                    (size, c.rgba())
+                }))
+            }
+        };
+        if let Some(((w, h), data)) = rgba {
+            match &self.tex {
+                Some(t) if t.size() == (w, h) => assets::upload(rc.ctx, t, &data, true),
+                _ => self.tex = Some(Rc::new(assets::texture_from_rgba(rc.ctx, w, h, &data, true, "paint"))),
+            }
+            self.uploaded = Some(key);
+        }
+    }
+    fn uniform(&self, key: &str) -> Option<UVal> {
+        // push: its own noise seed for "animate", 0..100
+        (key == "seed").then_some(UVal::F(self.seed))
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        (name == "tMask").then(|| self.tex.as_ref().map(|t| tex(t, SamplerKind::LinearClamp))).flatten()
     }
 }
