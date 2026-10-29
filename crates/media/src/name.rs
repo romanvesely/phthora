@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `<stem up to 30 chars>-phthora-YYYYMMDD-HHMMSS.<ext>` in local time
@@ -9,6 +11,28 @@ pub fn default_export_name(input_stem: &str, ext: &str) -> String {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     export_name_at(input_stem, ext, now + local_offset_secs(now))
+}
+
+/// [`default_export_name`] inside `dir` as a path that is free: not an existing file or folder and not in
+/// `taken` (names handed out earlier in the same batch). Where the name is in use, `-2`, `-3`, ... is added
+/// after the time stamp.
+pub fn unique_export_path(dir: &Path, input_stem: &str, ext: &str, taken: &HashSet<PathBuf>) -> PathBuf {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    unique_export_path_at(dir, input_stem, ext, now + local_offset_secs(now), taken)
+}
+
+/// Same as [`unique_export_path`] for an explicit wall-clock time (see [`export_name_at`]).
+pub fn unique_export_path_at(dir: &Path, input_stem: &str, ext: &str, local_unix_secs: i64, taken: &HashSet<PathBuf>) -> PathBuf {
+    let base = export_name_at(input_stem, "", local_unix_secs);
+    let ext = ext.trim_start_matches('.');
+    let dot = if ext.is_empty() { "" } else { "." };
+    (1u32..)
+        .map(|n| {
+            let number = if n == 1 { String::new() } else { format!("-{n}") };
+            dir.join(format!("{base}{number}{dot}{ext}"))
+        })
+        .find(|p| !taken.contains(p) && !p.exists())
+        .expect("an unused number exists")
 }
 
 /// Same as [`default_export_name`] for an explicit wall-clock time, given as
@@ -104,5 +128,30 @@ mod tests {
         assert_eq!(export_name_at("clip", "", 1_000_000_000), "clip-phthora-20010909-014640");
         let now = default_export_name("a", "webm");
         assert!(now.starts_with("a-phthora-") && now.ends_with(".webm"));
+    }
+
+    #[test]
+    fn unique_paths_never_reuse_a_name() {
+        let dir = std::env::temp_dir().join(format!("phthora-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = 1_000_000_000;
+        let mut taken = HashSet::new();
+        let a = unique_export_path_at(&dir, "clip", "mp4", t, &taken);
+        assert_eq!(a, dir.join("clip-phthora-20010909-014640.mp4"));
+        // handed out earlier in the batch
+        taken.insert(a.clone());
+        let b = unique_export_path_at(&dir, "clip", "mp4", t, &taken);
+        assert_eq!(b, dir.join("clip-phthora-20010909-014640-2.mp4"));
+        // already on disk
+        std::fs::write(&b, b"x").unwrap();
+        let c = unique_export_path_at(&dir, "clip", "mp4", t, &taken);
+        assert_eq!(c, dir.join("clip-phthora-20010909-014640-3.mp4"));
+        // a long stem keeps the number (it comes after the time stamp), a folder has no extension
+        let long = "x".repeat(50);
+        taken.insert(unique_export_path_at(&dir, &long, "", t, &taken));
+        let f = unique_export_path_at(&dir, &long, "", t, &taken);
+        assert!(f.file_name().unwrap().to_string_lossy().ends_with("20010909-014640-2"), "{f:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
