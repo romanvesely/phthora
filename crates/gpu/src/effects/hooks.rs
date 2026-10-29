@@ -1,9 +1,444 @@
-//! Per-effect extras for single-shader effects (textures, derived uniforms).
+//! Extra textures and uniforms for single-shader effects.
 
-use super::ShaderHook;
-use crate::context::GpuContext;
-use phthora_core::EffectDesc;
+use super::{RenderCtx, ShaderHook};
+use crate::assets::{self, VideoTexture};
+use crate::context::{GpuContext, SamplerKind, Target};
+use crate::shader::{TexInput, UVal};
+use crate::text::{Align, TextCanvas};
+use phthora_core::{EffectDesc, OutputMode, ResolvedEffect};
+use std::path::PathBuf;
+use std::rc::Rc;
 
-pub fn create_hook(_ctx: &GpuContext, _desc: &EffectDesc) -> Option<Box<dyn ShaderHook>> {
-    None
+pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn ShaderHook>> {
+    Some(match desc.id.as_str() {
+        "eight_bit" => Box::new(Cga::default()),
+        "instacolor" => Box::new(Lut::default()),
+        "hard_glitch" => Box::new(Glitch::default()),
+        "mask" => Box::new(ImageTex { name: "tMask", ..Default::default() }),
+        "media" => Box::new(Overlay::default()),
+        "vhs" => Box::new(Vhs::default()),
+        "super8" => Box::new(Super8::default()),
+        "ascii" => Box::new(Ascii::default()),
+        "caption" => Box::new(Caption::default()),
+        _ => return None,
+    })
+}
+
+/// Derive an independent 0..1 value from an instance seed.
+pub fn sub_seed(seed: f64, k: u32) -> f64 {
+    let v = ((seed * 12.9898 + k as f64 * 78.233).sin() * 43758.5453).fract();
+    v.abs()
+}
+
+fn tex(t: &Rc<Target>, sampler: SamplerKind) -> TexInput<'_> {
+    TexInput { view: &t.view, sampler }
+}
+
+/// Time used to pick a frame of an overlay clip.
+fn clip_time(rc: &RenderCtx, e: &ResolvedEffect, clip_seed: f64, duration: f64, image_seed_as_time: bool) -> f64 {
+    if rc.ft.mode == OutputMode::Image {
+        if image_seed_as_time {
+            return e.f("seed") as f64 * duration;
+        }
+        return 0.0;
+    }
+    rc.ft.export_time + clip_seed * 100.0
+}
+
+// ---------------------------------------------------------------- 8-bit
+
+#[derive(Default)]
+struct Cga {
+    cols: [[f32; 3]; 3],
+}
+
+impl ShaderHook for Cga {
+    fn prepare(&mut self, _rc: &mut RenderCtx, e: &ResolvedEffect) {
+        let c = match e.s("style") {
+            "1983" => ["#ff5555", "#59ff11", "#ffff00"],
+            "1984" => ["#55ffff", "#ff5650", "#ffff00"],
+            _ => ["#55ffff", "#ff55ff", "#ffffff"],
+        };
+        self.cols = c.map(phthora_core::params::parse_hex);
+    }
+    fn uniform(&self, key: &str) -> Option<UVal> {
+        // the reference assigns the first color to `colLight` after any param change
+        match key {
+            "colLight" => Some(UVal::V3(self.cols[0])),
+            "colDark" => Some(UVal::V3(self.cols[1])),
+            "colWhite" => Some(UVal::V3(self.cols[2])),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- InstaColor
+
+#[derive(Default)]
+struct Lut {
+    lut: Option<Rc<Target>>,
+    name: String,
+}
+
+impl ShaderHook for Lut {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        let style = e.s("style");
+        if self.lut.is_none() || self.name != style {
+            self.lut = rc.assets.lut(rc.ctx, style);
+            self.name = style.to_string();
+        }
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        (name == "tLUT").then(|| self.lut.as_ref().map(|t| tex(t, SamplerKind::NearestClamp))).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- Hard Glitch
+
+#[derive(Default)]
+struct Glitch {
+    disp: Option<Target>,
+}
+
+impl ShaderHook for Glitch {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        if self.disp.is_some() {
+            return;
+        }
+        const N: usize = 64;
+        // xorshift seeded from the instance seed
+        let mut s = (e.seed * 4294967295.0) as u64 | 1;
+        let mut rnd = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut data = vec![0f32; N * N * 4];
+        // same fill pattern as the reference (stride 3 over a 4-channel buffer)
+        for i in 0..N * N {
+            let v = rnd() as f32;
+            for k in 0..4 {
+                data[i * 3 + k] = v;
+            }
+        }
+        let halfs: Vec<u16> = data.iter().map(|&f| half::f16::from_f32(f).to_bits()).collect();
+        let t = Target::with_format(rc.ctx, N as u32, N as u32, wgpu::TextureFormat::Rgba16Float, "glitch");
+        rc.ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: Default::default(), aspect: Default::default() },
+            bytemuck::cast_slice(&halfs),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(N as u32 * 8), rows_per_image: Some(N as u32) },
+            wgpu::Extent3d { width: N as u32, height: N as u32, depth_or_array_layers: 1 },
+        );
+        self.disp = Some(t);
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        match (name, &self.disp) {
+            ("tDisp", Some(t)) => Some(TexInput { view: &t.view, sampler: SamplerKind::NearestClamp }),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Mask (image)
+
+#[derive(Default)]
+struct ImageTex {
+    name: &'static str,
+    path: String,
+    img: Option<Rc<Target>>,
+    black: Option<Rc<Target>>,
+}
+
+impl ShaderHook for ImageTex {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        let p = e.s("path");
+        if p != self.path || (self.img.is_none() && !p.is_empty()) {
+            self.path = p.to_string();
+            self.img = if p.is_empty() { None } else { rc.assets.image(rc.ctx, &PathBuf::from(p)).map(|(t, _)| t) };
+        }
+        if self.black.is_none() {
+            self.black = Some(rc.assets.solid(rc.ctx, [0, 0, 0, 255]));
+        }
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        if name != self.name {
+            return None;
+        }
+        self.img.as_ref().or(self.black.as_ref()).map(|t| tex(t, SamplerKind::LinearClamp))
+    }
+}
+
+// ---------------------------------------------------------------- Media overlay
+
+#[derive(Default)]
+struct Overlay {
+    path: String,
+    image: Option<Rc<Target>>,
+    video: Option<VideoTexture>,
+    aspect: f32,
+    black: Option<Rc<Target>>,
+}
+
+impl ShaderHook for Overlay {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        let p = e.s("path");
+        if p != self.path {
+            self.path = p.to_string();
+            self.image = None;
+            self.video = None;
+            self.aspect = 1.0;
+            if !p.is_empty() {
+                let path = PathBuf::from(p);
+                if assets::is_image_path(&path) {
+                    if let Some((t, a)) = rc.assets.image(rc.ctx, &path) {
+                        self.image = Some(t);
+                        self.aspect = a;
+                    }
+                } else {
+                    let v = VideoTexture::open(rc.ctx, rc.assets, &path, [0, 0, 0, 0]);
+                    let (w, h) = v.size();
+                    self.aspect = w as f32 / h.max(1) as f32;
+                    self.video = Some(v);
+                }
+            }
+        }
+        if let Some(v) = self.video.as_mut() {
+            let t = if rc.ft.mode == OutputMode::Image { 0.0 } else { rc.ft.export_time };
+            v.update(rc.ctx, t);
+        }
+        if self.black.is_none() {
+            self.black = Some(rc.assets.solid(rc.ctx, [0, 0, 0, 255]));
+        }
+    }
+    fn uniform(&self, key: &str) -> Option<UVal> {
+        (key == "sourceAspect").then_some(UVal::F(self.aspect))
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        if name != "tOverlay" {
+            return None;
+        }
+        let t = self.image.as_ref().or(self.video.as_ref().map(|v| &v.target)).or(self.black.as_ref())?;
+        Some(tex(t, SamplerKind::LinearClamp))
+    }
+}
+
+// ---------------------------------------------------------------- VHS
+
+#[derive(Default)]
+struct Vhs {
+    stat: Option<VideoTexture>,
+    time_tex: Option<Rc<Target>>,
+    /// (canvas size, text1, text2, arrow) last drawn
+    drawn: Option<((u32, u32), String, String, bool)>,
+}
+
+const VHS_CANVAS_W: u32 = 800;
+const VHS_MARGIN: f32 = 28.0;
+
+fn vhs_default_strings() -> (String, String) {
+    use chrono::{Datelike, Timelike};
+    let now = chrono::Local::now();
+    let h24 = now.hour();
+    let ampm = if h24 >= 12 { "PM" } else { "AM" };
+    let h = match h24 % 12 {
+        0 => 12,
+        x => x,
+    };
+    const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    (format!("{ampm} {h}:{:02}", now.minute()), format!("{} {}", MONTHS[now.month0() as usize], now.day()))
+}
+
+impl ShaderHook for Vhs {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        if self.stat.is_none() {
+            let p = rc.assets.video_path("vhs-static.mp4").unwrap_or_default();
+            self.stat = Some(VideoTexture::open(rc.ctx, rc.assets, &p, [0, 0, 0, 255]));
+        }
+        let st = self.stat.as_mut().unwrap();
+        let t = clip_time(rc, e, sub_seed(e.seed, 1), st.duration(), true);
+        st.update(rc.ctx, t);
+
+        let ar = rc.width as f32 / rc.height.max(1) as f32;
+        let size = (VHS_CANVAS_W, ((VHS_CANVAS_W as f32 / ar) as u32).max(1));
+        let (d1, d2) = vhs_default_strings();
+        let s1 = if e.s("text1").is_empty() { d1 } else { e.s("text1").to_string() };
+        let s2 = if e.s("text2").is_empty() { d2 } else { e.s("text2").to_string() };
+        let arrow = ((rc.ft.loop_progress * 8.0).floor() as i64) % 2 == 0;
+        let key = (size, s1, s2, arrow);
+        if self.drawn.as_ref() != Some(&key) {
+            let fonts = rc.assets.font("VCR");
+            let mut c = TextCanvas::new(size.0, size.1);
+            let h = size.1 as f32;
+            let white = Some([255, 255, 255]);
+            c.draw_text(&fonts, 28.0, &key.1, VHS_MARGIN, h - VHS_MARGIN * 3.0, Align::Left, white, None, true);
+            c.draw_text(&fonts, 28.0, &key.2, VHS_MARGIN, h - VHS_MARGIN * 2.0, Align::Left, white, None, true);
+            c.draw_text(&fonts, 28.0, "PLAY", VHS_MARGIN, VHS_MARGIN, Align::Left, white, None, true);
+            if arrow {
+                c.draw_text(&fonts, 28.0, "\u{25B6}", VHS_MARGIN + 80.0, VHS_MARGIN - 4.0, Align::Left, white, None, true);
+            }
+            let data = c.to_rgba_straight();
+            match &self.time_tex {
+                Some(t) if t.size() == size => assets::upload(rc.ctx, t, &data, true),
+                _ => self.time_tex = Some(Rc::new(assets::texture_from_rgba(rc.ctx, size.0, size.1, &data, true, "vhs-time"))),
+            }
+            self.drawn = Some(key);
+        }
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        match name {
+            "tStatic" => self.stat.as_ref().map(|v| tex(&v.target, SamplerKind::LinearClamp)),
+            "tTime" => self.time_tex.as_ref().map(|t| tex(t, SamplerKind::LinearClamp)),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Super8
+
+#[derive(Default)]
+struct Super8 {
+    dust: Option<VideoTexture>,
+    burn: Option<VideoTexture>,
+}
+
+impl ShaderHook for Super8 {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        if self.dust.is_none() {
+            let p = rc.assets.video_path("dust.mp4").unwrap_or_default();
+            // without a video backend: white dust layer (multiplied) and black burn (added) are neutral
+            self.dust = Some(VideoTexture::open(rc.ctx, rc.assets, &p, [255, 255, 255, 255]));
+            let p = rc.assets.video_path("burn.mp4").unwrap_or_default();
+            self.burn = Some(VideoTexture::open(rc.ctx, rc.assets, &p, [0, 0, 0, 255]));
+        }
+        for (k, v) in [self.dust.as_mut().unwrap(), self.burn.as_mut().unwrap()].into_iter().enumerate() {
+            let t = clip_time(rc, e, sub_seed(e.seed, 2 + k as u32), v.duration(), true);
+            v.update(rc.ctx, t);
+        }
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        match name {
+            "tDust" => self.dust.as_ref().map(|v| tex(&v.target, SamplerKind::LinearClamp)),
+            "tBurn" => self.burn.as_ref().map(|v| tex(&v.target, SamplerKind::LinearClamp)),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- ASCII
+
+#[derive(Default)]
+struct Ascii {
+    atlas: Option<Rc<Target>>,
+    set: String,
+    count: usize,
+}
+
+pub fn ascii_charset(name: &str) -> &'static str {
+    match name {
+        "Karpinsk" => " .°*oO@",
+        "Okha" => " .:+j6bHM",
+        "Luza" => " .:*o&8@#",
+        "Sharya" => " ._/:-+=()<>",
+        "Ukhta" => " .:^\"~cvo*SO80#",
+        "Donetsk" => " .`~:;!>+=icjtJY56SXDQKHNWM",
+        _ => " .:-=+*%@#",
+    }
+}
+
+impl ShaderHook for Ascii {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        let set = e.s("charSet");
+        if self.atlas.is_some() && self.set == set {
+            return;
+        }
+        let chars = ascii_charset(set);
+        let n = chars.chars().count();
+        const CELL: u32 = 8;
+        let fonts = rc.assets.font("Pixel");
+        let mut c = TextCanvas::new(CELL * n as u32, CELL);
+        c.fill_rect(0.0, 0.0, (CELL * n as u32) as f32, CELL as f32, [0, 0, 0, 255]);
+        c.draw_text(&fonts, CELL as f32, chars, 0.0, 0.0, Align::Left, Some([255, 255, 255]), None, true);
+        let data = c.to_rgba_straight();
+        self.atlas = Some(Rc::new(assets::texture_from_rgba(rc.ctx, c.width(), c.height(), &data, true, "ascii")));
+        self.set = set.to_string();
+        self.count = n;
+    }
+    fn uniform(&self, key: &str) -> Option<UVal> {
+        (key == "fontCharCount").then_some(UVal::F(self.count as f32))
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        (name == "tFont").then(|| self.atlas.as_ref().map(|t| tex(t, SamplerKind::NearestClamp))).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- Caption
+
+#[derive(Default)]
+struct Caption {
+    tex: Option<Rc<Target>>,
+    key: String,
+    repeat: bool,
+}
+
+const CAPTION_CANVAS: f32 = 1600.0;
+const CAPTION_FONT: f32 = 400.0;
+const CAPTION_OUTLINE: f32 = 40.0;
+
+impl ShaderHook for Caption {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        self.repeat = e.b("repeat");
+        let key = format!(
+            "{}x{}|{}|{}|{}|{}|{}|{:?}|{}|{:?}",
+            rc.width,
+            rc.height,
+            e.s("text"),
+            e.f("size"),
+            e.f("lineHeight"),
+            e.s("font"),
+            e.s("align"),
+            e.values.get("color"),
+            e.b("outline"),
+            e.values.get("outlineColor")
+        );
+        if self.tex.is_some() && key == self.key {
+            return;
+        }
+        let (cw, ch) = (rc.width, rc.height);
+        let scl = cw as f32 / CAPTION_CANVAS;
+        let size = e.f("size");
+        let padding = CAPTION_OUTLINE / 2.0 * size * scl;
+        let font_size = size * CAPTION_FONT * scl;
+        let line_h = font_size * e.f("lineHeight");
+        let align = Align::parse(e.s("align"));
+        let x = match align {
+            Align::Left => padding,
+            Align::Center => cw as f32 / 2.0,
+            Align::Right => cw as f32 - padding,
+        };
+        let rgb = |k: &str| match e.values.get(k) {
+            Some(phthora_core::Value::Color(c)) => c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
+            _ => [255, 255, 255],
+        };
+        let fonts = rc.assets.font(e.s("font"));
+        let mut c = TextCanvas::new(cw, ch);
+        let lines = TextCanvas::wrap(&fonts, font_size, e.s("text"), cw as f32 - padding * 2.0);
+        let stroke = e.b("outline").then(|| (rgb("outlineColor"), CAPTION_OUTLINE * size * scl));
+        for (i, line) in lines.iter().enumerate() {
+            c.draw_text(&fonts, font_size, line, x, padding + i as f32 * line_h, align, Some(rgb("color")), stroke, true);
+        }
+        // keep the edge texels empty so clamped sampling does not smear text
+        c.clear_rect(0, 0, cw, 1);
+        c.clear_rect(0, 0, 1, ch);
+        let data = c.to_rgba_straight();
+        match &self.tex {
+            Some(t) if t.size() == (cw, ch) => assets::upload(rc.ctx, t, &data, true),
+            _ => self.tex = Some(Rc::new(assets::texture_from_rgba(rc.ctx, cw, ch, &data, true, "caption"))),
+        }
+        self.key = key;
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        let s = if self.repeat { SamplerKind::LinearRepeat } else { SamplerKind::LinearClamp };
+        (name == "tCaption").then(|| self.tex.as_ref().map(|t| tex(t, s))).flatten()
+    }
 }

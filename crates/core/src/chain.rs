@@ -142,7 +142,15 @@ impl EffectInstance {
             OutputMode::Image => 0.0,
             OutputMode::Video => ((t.loop_progress + self.seed) % 1.0) as f32,
         };
-        ResolvedEffect { uid: self.uid, desc: self.desc, values, time, data: self.data.clone(), triggers: self.triggers.clone() }
+        ResolvedEffect {
+            uid: self.uid,
+            desc: self.desc,
+            values,
+            time,
+            seed: self.seed,
+            data: self.data.clone(),
+            triggers: self.triggers.clone(),
+        }
     }
 }
 
@@ -154,6 +162,8 @@ pub struct ResolvedEffect {
     pub values: BTreeMap<String, Value>,
     /// value for the `time` uniform (loop phase + seed, or 0 in image mode)
     pub time: f32,
+    /// per-instance random seed (0..1), stable across frames and saved in presets
+    pub seed: f64,
     pub data: BTreeMap<String, String>,
     pub triggers: BTreeMap<String, u64>,
 }

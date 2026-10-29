@@ -5,6 +5,7 @@
  "ascii": {
   "amount": 1.0,
   "colorize": 1.0,
+  "count": 0,
   "fontCharCount": 10.0,
   "size": 1.0
  },
@@ -68,7 +69,11 @@
   "scale": 2.0
  },
  "chroma_key": {
+  "b_despill": 0,
+  "blackBoost": 0,
   "chromaCol": "#46ff03",
+  "keyStrength": 0,
+  "lowerRange": 0,
   "threshold": 0.4
  },
  "color_correction": {
@@ -119,10 +124,7 @@
   "colLight": "#ff4a7d"
  },
  "edge": {
-  "amount": 0.5,
-  "edgeCol": "#ffffff",
-  "passthru": 0.5,
-  "thickness": 1.0
+  "b_invert": 0
  },
  "feedback": {
   "amount": 0.5,
@@ -290,7 +292,8 @@
   "amount": 0.5,
   "b_animate": 0.0,
   "b_rgb": 0.0,
-  "b_showMask": 0.0
+  "b_showMask": 0.0,
+  "seed": 0
  },
  "rainbow": {
   "amount": 0.5,
@@ -322,6 +325,7 @@
  },
  "sharpen": {
   "amount": 0.5,
+  "speed": 0,
   "spread": 0.5
  },
  "slices": {
@@ -424,6 +428,7 @@
   "amount": 0.3,
   "angle": 0.0,
   "position": 0.5,
+  "seed": 0,
   "size": 0.5
  },
  "wobble": {

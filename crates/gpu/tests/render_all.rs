@@ -59,3 +59,46 @@ fn render_every_effect() {
         println!("missing uniforms {id}: {m:?}");
     }
 }
+
+/// Visual check: renders every effect for a few frames and writes PNGs.
+/// Set PHTHORA_DUMP_DIR (output) and PHTHORA_DUMP_INPUT (a PNG); skipped otherwise.
+#[test]
+fn dump_effects() {
+    let (Ok(dir), Ok(input)) = (std::env::var("PHTHORA_DUMP_DIR"), std::env::var("PHTHORA_DUMP_INPUT")) else {
+        return;
+    };
+    let only = std::env::var("PHTHORA_DUMP_ONLY").unwrap_or_default();
+    let (w, h, px) = phthora_gpu::assets::decode_png(&std::fs::read(input).unwrap()).expect("png");
+    let ctx = GpuContext::headless().expect("gpu");
+    let ts = TimingSettings { fps: 15.0, duration: 2.0, ..Default::default() };
+    std::fs::create_dir_all(&dir).unwrap();
+    for d in registry() {
+        if !only.is_empty() && !only.split(',').any(|o| o == d.id) {
+            continue;
+        }
+        let mut engine = Engine::new(&ctx, w, h);
+        engine.set_source_rgba(w, h, &px);
+        let mut e = EffectInstance::new(d);
+        e.seed = 0.25;
+        let frames = 12;
+        for f in 0..frames {
+            let t = ts.at_frame(f);
+            let r = e.resolve(&t, &LiveInputs::default(), &HashMap::new());
+            engine.render(std::slice::from_ref(&r), &t);
+        }
+        let mut out = engine.read_output();
+        // un-premultiply for viewing
+        for p in out.chunks_exact_mut(4) {
+            let a = p[3] as u32;
+            if a > 0 && a < 255 {
+                for c in &mut p[..3] {
+                    *c = ((*c as u32 * 255) / a).min(255) as u8;
+                }
+            }
+        }
+        let f = std::fs::File::create(format!("{dir}/{}.png", d.id)).unwrap();
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.write_header().unwrap().write_image_data(&out).unwrap();
+    }
+}

@@ -5,6 +5,7 @@ pub mod context;
 pub mod effects;
 pub mod engine;
 pub mod shader;
+pub mod text;
 
 pub use context::{GpuContext, Target};
 pub use engine::Engine;

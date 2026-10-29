@@ -50,7 +50,7 @@ impl Engine {
             lib,
             background: [0.0, 0.0, 0.0, 1.0],
             flip_x: false,
-            assets: Assets::default(),
+            assets: Assets::new(),
             last_output: None,
         }
     }

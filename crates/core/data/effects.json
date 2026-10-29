@@ -3075,7 +3075,14 @@
     "key": "font",
     "label": "Font",
     "type": "combo",
-    "values": [],
+    "values": [
+     "Sans",
+     "Serif",
+     "Mono",
+     "Impact",
+     "VCR",
+     "Pixel"
+    ],
     "default": "Sans"
    },
    {
