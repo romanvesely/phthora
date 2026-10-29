@@ -304,6 +304,14 @@ impl Rig {
         self.engine.render(&[e.resolve(&t, &LiveInputs::default(), &HashMap::new())], &t);
         self.engine.read_output()
     }
+
+    /// Next frame of a sequence: upload the source, render, advance time.
+    fn step(&mut self, e: &EffectInstance, w: u32, h: u32, src: &[u8]) -> Vec<u8> {
+        self.engine.set_source_rgba(w, h, src);
+        let out = self.render(e);
+        self.frame += 1;
+        out
+    }
 }
 
 fn luma_mesh_with(params: &[(&str, phthora_core::Value)]) -> EffectInstance {
@@ -421,5 +429,138 @@ fn luma_mesh_sizes_are_output_pixels() {
         let points = rig.render(&luma_mesh_with(&[("mode", text("Points")), ("lumaHeight", float(0.0)), ("resolution", float(20.0)), ("pointSize", float(5.0))]));
         let cover: f32 = (w / 2 - 6..w / 2 + 6).map(|x| at(&points, x, h / 2)).sum();
         assert!((cover - 5.0).abs() < 0.75, "{w}x{h}: point size {cover}");
+    }
+}
+
+/// Frame k of a test sequence: red encodes k, so a pixel tells which frame it shows.
+fn seq_frame(w: u32, h: u32, k: u32) -> Vec<u8> {
+    solid(w, h, [5 + 10 * k as u8, 100, 200])
+}
+
+fn slit(params: &[(&str, phthora_core::Value)]) -> EffectInstance {
+    let mut e = EffectInstance::by_id("slit_scan").unwrap();
+    for (k, v) in params {
+        e.set(k, v.clone());
+    }
+    e
+}
+
+#[test]
+fn slit_scan_stripes_show_delayed_frames() {
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (160, 90);
+    let n = 8u32;
+    let red = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4) as usize] as i32;
+    let stripe_x = |i: u32| (i * w / n) + w / n / 2;
+    let hard = slit(&[("slices", float(n as f32)), ("amount", float(1.0))]);
+    let mut rig = Rig::new(&ctx, w, h);
+    let mut last = vec![];
+    for k in 0..12u32 {
+        last = rig.step(&hard, w, h, &seq_frame(w, h, k));
+        // stripe i shows the frame i back, the oldest recorded one before the ring is full
+        for i in 0..n {
+            let want = 5 + 10 * k.saturating_sub(i) as i32;
+            let got = red(&last, stripe_x(i), h / 2);
+            assert_eq!(got, want, "frame {k}, stripe {i}");
+            assert_eq!(last[((h / 2 * w + stripe_x(i)) * 4 + 1) as usize], 100, "other channels pass");
+        }
+    }
+    // the same sequence on a fresh engine gives the same picture
+    let mut again = Rig::new(&ctx, w, h);
+    let mut out = vec![];
+    for k in 0..12u32 {
+        out = again.step(&hard, w, h, &seq_frame(w, h, k));
+    }
+    assert!(out == last, "deterministic");
+
+    // amount scales the delay: half of it, rounded to whole frames
+    let half = slit(&[("slices", float(n as f32)), ("amount", float(0.5))]);
+    let mut rig = Rig::new(&ctx, w, h);
+    for k in 0..12u32 {
+        last = rig.step(&half, w, h, &seq_frame(w, h, k));
+    }
+    for (i, delay) in [(0u32, 0i32), (2, 1), (5, 3), (7, 4)] {
+        assert_eq!(red(&last, stripe_x(i), h / 2), 5 + 10 * (11 - delay), "amount 0.5, stripe {i}");
+    }
+    let zero = slit(&[("slices", float(n as f32)), ("amount", float(0.0))]);
+    let out = rig.step(&zero, w, h, &seq_frame(w, h, 12));
+    assert!(out == seq_frame(w, h, 12), "amount 0 shows the live frame");
+
+    // smooth: between the two neighbouring delays
+    let smooth = slit(&[("slices", float(n as f32)), ("amount", float(1.0)), ("smooth", phthora_core::Value::Bool(true))]);
+    let mut rig = Rig::new(&ctx, w, h);
+    for k in 0..12u32 {
+        last = rig.step(&smooth, w, h, &seq_frame(w, h, k));
+    }
+    // right at the middle the delay is 3.5 frames
+    let mid = red(&last, w / 2, h / 2);
+    assert!((mid - (5 + 10 * 11 - 35)).abs() <= 2, "smooth middle {mid}");
+    let (a, b) = (red(&last, w / 2 - 20, h / 2), red(&last, w / 2 + 20, h / 2));
+    assert!(a > mid && mid > b, "delay grows to the right: {a} {mid} {b}");
+    let distinct: std::collections::BTreeSet<i32> = (0..w).map(|x| red(&last, x, h / 2)).collect();
+    assert!(distinct.len() > 3 * n as usize, "gradient, not stripes: {} values", distinct.len());
+
+    // angle: a quarter turn makes horizontal stripes, the delay growing from bottom to top
+    let up = slit(&[("slices", float(n as f32)), ("amount", float(1.0)), ("angle", float(0.25))]);
+    let mut rig = Rig::new(&ctx, w, h);
+    for k in 0..12u32 {
+        last = rig.step(&up, w, h, &seq_frame(w, h, k));
+    }
+    let row = |i: u32| h - 1 - (i * h / n + h / n / 2);
+    for i in 0..n {
+        assert_eq!(red(&last, w / 2, row(i)), 5 + 10 * (11 - i as i32), "angle 0.25, stripe {i} from the bottom");
+    }
+    assert_eq!(red(&last, 3, row(4)), red(&last, w - 4, row(4)), "stripes are horizontal");
+}
+
+#[test]
+fn slit_scan_reset_and_image_mode() {
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (96, 54);
+    let e = slit(&[("slices", float(6.0)), ("amount", float(1.0))]);
+    let red = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4) as usize];
+    let mut rig = Rig::new(&ctx, w, h);
+    let mut out = vec![];
+    for k in 0..10u32 {
+        out = rig.step(&e, w, h, &seq_frame(w, h, k));
+    }
+    assert!(red(&out, 3, 10) != red(&out, w - 3, 10), "stripes differ before the reset");
+    // reset empties the ring: only the new frame is left, so every stripe shows it
+    rig.engine.reset_history();
+    let out = rig.step(&e, w, h, &seq_frame(w, h, 10));
+    assert!(out == seq_frame(w, h, 10), "after a reset all stripes show the live frame");
+    let out = rig.step(&e, w, h, &seq_frame(w, h, 11));
+    assert_eq!(red(&out, 3, 10), 5 + 110);
+    assert_eq!(red(&out, w - 3, 10), 5 + 100, "the ring starts over after a reset");
+
+    // an image has no time: passed through, whatever was recorded before
+    let mut still = Rig::new(&ctx, w, h);
+    still.ts.mode = phthora_core::OutputMode::Image;
+    for k in 0..6u32 {
+        let out = still.step(&e, w, h, &seq_frame(w, h, k));
+        assert!(out == seq_frame(w, h, k), "image mode passes frame {k} through");
+    }
+    let test = test_image(w, h);
+    assert!(still.step(&e, w, h, &test) == test, "image mode keeps a real picture exactly");
+    // switching to video starts with an empty ring
+    still.ts.mode = phthora_core::OutputMode::Video;
+    let out = still.step(&e, w, h, &seq_frame(w, h, 7));
+    assert!(out == seq_frame(w, h, 7));
+}
+
+#[test]
+fn slit_scan_tall_frames_use_a_smaller_ring() {
+    let ctx = GpuContext::headless().expect("gpu");
+    // taller than 1080: the ring frames are scaled down, the live stripe stays at full size
+    let (w, h) = (512, 1200);
+    let e = slit(&[("slices", float(4.0)), ("amount", float(1.0))]);
+    let mut rig = Rig::new(&ctx, w, h);
+    let mut out = vec![];
+    for k in 0..6u32 {
+        out = rig.step(&e, w, h, &seq_frame(w, h, k));
+    }
+    let red = |x: u32, y: u32| out[((y * w + x) * 4) as usize] as i32;
+    for i in 0..4u32 {
+        assert_eq!(red(i * w / 4 + w / 8, h / 2), 5 + 10 * (5 - i as i32), "tall frame, stripe {i}");
     }
 }

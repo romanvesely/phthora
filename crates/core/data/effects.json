@@ -606,6 +606,54 @@
   ]
  },
  {
+  "id": "slit_scan",
+  "name": "Slit Scan",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": null,
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "slices",
+    "label": "Slices",
+    "type": "float",
+    "min": 2,
+    "max": 64,
+    "step": 1,
+    "default": 16,
+    "rand": "low"
+   },
+   {
+    "key": "angle",
+    "label": "Angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "smooth",
+    "label": "Smooth",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
   "id": "bulge",
   "name": "Bulge",
   "category": "Displacement and Glitch",

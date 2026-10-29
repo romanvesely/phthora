@@ -21,6 +21,7 @@ pub fn create_custom(ctx: &GpuContext, lib: &ShaderLibrary, desc: &EffectDesc) -
         "blur" => Box::new(Blur::new(ctx, lib)),
         "transform_3d" => Box::new(Plane3d::new(ctx)),
         "luma_mesh" => Box::new(LumaMesh::new(ctx)),
+        "slit_scan" => Box::new(SlitScan::new(ctx, lib)),
         _ => return None,
     })
 }
@@ -421,6 +422,183 @@ impl GpuEffect for Blur {
         let dm = self.mix.pack(&|k| base_uniform(e, rc, k));
         let last = &self.pyr.levels[LEVELS - 1].1;
         self.mix.run(rc.ctx, rc.enc, &dm, &texs(&[("tDiffuse", input), ("tBlend", last)]), &rc.blank.view, out, Some(rc.clear));
+    }
+}
+
+// ---------------------------------------------------------------- Slit Scan
+
+const SLIT_SRC: &str = include_str!("../../wgsl/slit_scan.wgsl");
+/// Ring frames taller than this are scaled down to bound the memory.
+const SLIT_MAX_HEIGHT: u32 = 1080;
+const SLIT_MAX_SLICES: u32 = 64;
+
+/// Size of the ring frames for a render size.
+fn ring_size(w: u32, h: u32) -> (u32, u32) {
+    if h > SLIT_MAX_HEIGHT {
+        (((w as f64 * SLIT_MAX_HEIGHT as f64 / h as f64).round() as u32).max(1), SLIT_MAX_HEIGHT)
+    } else {
+        (w.max(1), h.max(1))
+    }
+}
+
+/// The last frames of the input in a 2D array texture, newest at `head`.
+struct SlitRing {
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    layers: Vec<wgpu::TextureView>,
+    size: (u32, u32),
+    head: u32,
+    /// recorded frames, at most the layer count
+    count: u32,
+}
+
+impl SlitRing {
+    fn new(ctx: &GpuContext, size: (u32, u32), cap: u32) -> Self {
+        let tex = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("slit-ring"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: cap },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let layers = (0..cap)
+            .map(|i| {
+                tex.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: i,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Self { tex, view, layers, size, head: cap - 1, count: 0 }
+    }
+
+    fn cap(&self) -> u32 {
+        self.tex.depth_or_array_layers()
+    }
+}
+
+/// Slit Scan: stripes along an angle show the input with a delay growing from stripe to stripe.
+struct SlitScan {
+    pipeline: wgpu::RenderPipeline,
+    bgl: wgpu::BindGroupLayout,
+    layout: UniformLayout,
+    ubuf: UniformBuf,
+    /// plain copy, into ring layers and (image mode) to the output
+    copy: Rc<CompiledShader>,
+    ring: Option<SlitRing>,
+}
+
+impl SlitScan {
+    fn new(ctx: &GpuContext, lib: &ShaderLibrary) -> Self {
+        let (uniform, _) = reflect(SLIT_SRC).expect("slit scan shader");
+        let layout = uniform.expect("uniform block");
+        let dev = &ctx.device;
+        let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty, count: None };
+        let tex = |dimension| wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: dimension, multisampled: false };
+        let bgl = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("slit-scan"),
+            entries: &[
+                entry(layout.binding, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }),
+                entry(1, tex(wgpu::TextureViewDimension::D2)),
+                entry(2, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                entry(3, tex(wgpu::TextureViewDimension::D2Array)),
+            ],
+        });
+        let pl = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("slit-scan"), bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+        let vs = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("fullscreen"), source: wgpu::ShaderSource::Wgsl(crate::shader::FULLSCREEN_WGSL.into()) });
+        let fs = dev.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("slit-scan"), source: wgpu::ShaderSource::Wgsl(SLIT_SRC.into()) });
+        let pipeline = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("slit-scan"),
+            layout: Some(&pl),
+            vertex: wgpu::VertexState { module: &vs, entry_point: Some("vs_main"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &fs,
+                entry_point: Some("main"),
+                targets: &[Some(wgpu::ColorTargetState { format: FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let ubuf = UniformBuf::new(ctx, layout.size);
+        Self { pipeline, bgl, layout, ubuf, copy: lib.get_with("copy", Blend::Replace, FORMAT), ring: None }
+    }
+
+    fn copy_pass(&self, rc: &mut RenderCtx, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
+        let tex = |n: &str| (n == "tDiffuse").then_some(TexInput { view: src, sampler: SamplerKind::LinearClamp });
+        run_pass(rc.ctx, rc.enc, &self.copy, None, &tex, &rc.blank.view, dst, Some(rc.clear));
+    }
+}
+
+impl GpuEffect for SlitScan {
+    fn render(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect, input: &Target, _orig: &Target, out: &Target) {
+        // an image has no time: nothing to delay
+        if rc.ft.mode == OutputMode::Image {
+            self.copy_pass(rc, &input.view, &out.view);
+            return;
+        }
+        let slices = (e.f("slices").round() as u32).clamp(2, SLIT_MAX_SLICES);
+        // whole steps of 8 layers, so moving the slider does not reallocate on every change
+        let cap = slices.div_ceil(8) * 8;
+        let size = ring_size(rc.width, rc.height);
+        if self.ring.as_ref().is_none_or(|r| r.size != size || r.cap() != cap) {
+            self.ring = Some(SlitRing::new(rc.ctx, size, cap));
+        }
+        let mut ring = self.ring.take().unwrap();
+        ring.head = (ring.head + 1) % cap;
+        ring.count = (ring.count + 1).min(cap);
+        self.copy_pass(rc, &input.view, &ring.layers[ring.head as usize]);
+        let (data, _) = pack_uniforms(&self.layout, &|k| match k {
+            "slices" => Some(UVal::F(slices as f32)),
+            "head" => Some(UVal::F(ring.head as f32)),
+            "cap" => Some(UVal::F(cap as f32)),
+            "count" => Some(UVal::F(ring.count as f32)),
+            _ => base_uniform(e, rc, k),
+        });
+        self.ubuf.write(rc.ctx, &data);
+        let bg = rc.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("slit-scan"),
+            layout: &self.bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: self.layout.binding, resource: self.ubuf.buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&input.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(rc.ctx.samplers.get(SamplerKind::LinearClamp)) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&ring.view) },
+            ],
+        });
+        let mut rp = rc.enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("slit-scan"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &out.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: rc.clear[0], g: rc.clear[1], b: rc.clear[2], a: rc.clear[3] }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        rp.set_pipeline(&self.pipeline);
+        rp.set_bind_group(0, &bg, &[]);
+        rp.draw(0..3, 0..1);
+        drop(rp);
+        self.ring = Some(ring);
+    }
+
+    fn reset(&mut self, _ctx: &GpuContext) {
+        if let Some(r) = &mut self.ring {
+            r.count = 0;
+        }
     }
 }
 
@@ -882,6 +1060,16 @@ mod tests {
     #[test]
     fn pyramid_sizes() {
         assert_eq!(pyramid(1920, 1080), vec![(960, 540), (480, 270), (240, 135), (120, 68)]);
+    }
+
+    #[test]
+    fn slit_ring_stays_within_1080p() {
+        assert_eq!(ring_size(1920, 1080), (1920, 1080));
+        assert_eq!(ring_size(1280, 720), (1280, 720));
+        assert_eq!(ring_size(3840, 2160), (1920, 1080));
+        assert_eq!(ring_size(2560, 1440), (1920, 1080));
+        assert_eq!(ring_size(512, 1200), (461, 1080));
+        assert_eq!(ring_size(1, 4000), (1, 1080));
     }
 
     #[test]
