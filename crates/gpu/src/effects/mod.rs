@@ -24,6 +24,8 @@ pub struct RenderCtx<'a> {
     /// premultiplied background used to clear every pass target
     pub clear: [f64; 4],
     pub blank: &'a Target,
+    /// the chain's source after the input stage (what the first effect receives)
+    pub source: &'a Target,
     pub assets: &'a mut Assets,
     /// log-frequency audio spectrum of this frame, 0..1 (empty without audio)
     pub audio: &'a [f32],
@@ -171,6 +173,7 @@ impl GpuEffect for ShaderEffect {
             self.ubuf.write(rc.ctx, &data);
         }
         let hook = &self.hook;
+        let source = rc.source;
         let textures = |name: &str| -> Option<TexInput> {
             if let Some(t) = hook.as_ref().and_then(|h| h.texture(name)) {
                 return Some(t);
@@ -179,6 +182,7 @@ impl GpuEffect for ShaderEffect {
             match name {
                 "tDiffuse" => Some(TexInput { view: &input.view, sampler }),
                 "tOrig" => Some(TexInput { view: &orig.view, sampler }),
+                "tSource" => Some(TexInput { view: &source.view, sampler }),
                 _ => None,
             }
         };

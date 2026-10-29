@@ -153,6 +153,7 @@ impl Engine {
                     height: self.height,
                     clear,
                     blank: &self.blank,
+                    source: &self.base,
                     assets: &mut self.assets,
                     audio: &self.audio_spectrum,
                     paint: &self.paint,
