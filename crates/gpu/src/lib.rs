@@ -1,14 +1,10 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! GPU rendering of the effect chain (wgpu).
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod assets;
+pub mod context;
+pub mod effects;
+pub mod engine;
+pub mod shader;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use context::{GpuContext, Target};
+pub use engine::Engine;

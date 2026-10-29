@@ -2541,6 +2541,14 @@ dependencies = [
 [[package]]
 name = "phthora-gpu"
 version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "naga",
+ "phthora-core",
+ "pollster",
+ "serde_json",
+ "wgpu",
+]
 
 [[package]]
 name = "phthora-media"

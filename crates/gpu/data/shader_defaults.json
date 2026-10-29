@@ -1,0 +1,435 @@
+{
+ "accumulator": {
+  "fade": 0.91
+ },
+ "ascii": {
+  "amount": 1.0,
+  "colorize": 1.0,
+  "fontCharCount": 10.0,
+  "size": 1.0
+ },
+ "audio_visualizer": {
+  "blendModeIndex": 0.0,
+  "opacity": 1.0
+ },
+ "bad_tv": {
+  "distortion": 0.5,
+  "distortion2": 0.2,
+  "rollSpeed": 1.0,
+  "time": 0.0
+ },
+ "barrel_blur": {
+  "amount": 0.25,
+  "b_concave": 0.0,
+  "b_invert": 0.0,
+  "resolution": [
+   800.0,
+   600.0
+  ]
+ },
+ "bleach": {
+  "amount": 0.5
+ },
+ "bloom": {
+  "amount": 0.3,
+  "vignette": 0.5
+ },
+ "bloom_blur": {
+  "blurFac": 1.0,
+  "delta": [
+   0.0,
+   1.0
+  ],
+  "resolution": [
+   1.0,
+   1.0
+  ]
+ },
+ "blur_blur": {
+  "delta": [
+   0.0,
+   1.0
+  ],
+  "resolution": [
+   1.0,
+   1.0
+  ]
+ },
+ "bulge": {
+  "amount": 0.3
+ },
+ "caption": {
+  "b_repeat": 1.0,
+  "blendModeIndex": 0.0,
+  "opacity": 1.0
+ },
+ "cga": {
+  "amount": 1.0,
+  "scale": 2.0
+ },
+ "chroma_key": {
+  "chromaCol": "#46ff03",
+  "threshold": 0.4
+ },
+ "color_correction": {
+  "b_invert": 0.0,
+  "brightness": 0.5,
+  "contrast": 0.0,
+  "hue": 0.0,
+  "saturation": 0.5
+ },
+ "crt": {
+  "amount": 1.0,
+  "brightness": 0.5,
+  "curve": 0.5,
+  "scale": 0.3,
+  "vignette": 0.8
+ },
+ "data_mosh_displace": {
+  "amount": 0.2,
+  "blockiness": 0.2,
+  "flow": 0.5,
+  "time": 0.1
+ },
+ "debug": {
+  "amount": 0.0,
+  "speed": 1.0,
+  "time": 0.0
+ },
+ "decimate1": {
+  "amount": 0.5,
+  "colorize": 0.5,
+  "scale": 0.5,
+  "speed": 0.5
+ },
+ "dither": {
+  "amount": 1.0,
+  "colorize": 0.0,
+  "scale": 2.0
+ },
+ "dot_matrix": {
+  "amount": 1.0,
+  "blur": 0.2,
+  "count": 40.0,
+  "size": 0.3
+ },
+ "duo_tone": {
+  "amount": 1.0,
+  "colDark": "#01215a",
+  "colLight": "#ff4a7d"
+ },
+ "edge": {
+  "amount": 0.5,
+  "edgeCol": "#ffffff",
+  "passthru": 0.5,
+  "thickness": 1.0
+ },
+ "feedback": {
+  "amount": 0.5,
+  "hueShift": 0.0,
+  "rotate": 0.5,
+  "scale": 0.5,
+  "warp": 0.5
+ },
+ "glitch": {
+  "amount": 0.5,
+  "colorSplit": 0.5,
+  "scale": 0.5,
+  "speed": 0.5,
+  "time": 0.0
+ },
+ "gradient": {
+  "amount": 0.5,
+  "angle": 0.0,
+  "b_radial": 0.0,
+  "blendModeIndex": 0.0,
+  "color1": "#ffffff",
+  "color2": "#ffffff",
+  "color3": "#ffffff",
+  "color4": "#ffffff",
+  "color5": "#ffffff",
+  "color6": "#ffffff",
+  "numStops": 2.0,
+  "position": 0.0,
+  "scale": 1.0,
+  "stop1": 0.0,
+  "stop2": 0.0,
+  "stop3": 0.0,
+  "stop4": 0.0,
+  "stop5": 0.0,
+  "stop6": 0.0
+ },
+ "grain": {
+  "amount": 0.5,
+  "b_RGB": 1.0,
+  "blendModeIndex": 0.0,
+  "time": 0.0
+ },
+ "half_tone": {
+  "amount": 1.0,
+  "b_cmyk": 0.0,
+  "resolution": [
+   256.0,
+   256.0
+  ],
+  "scale": 0.7
+ },
+ "highlight": {
+  "threshold": 0.5
+ },
+ "hue_cycle": {
+  "amount": 1.0,
+  "hue": 0.0,
+  "speed": 1.0,
+  "time": 1.0
+ },
+ "jitter": {
+  "amount": 0.2,
+  "angle": 0.0,
+  "speed": 0.8,
+  "time": 0.0
+ },
+ "kaleido": {
+  "amount": 1.0,
+  "angle": 0.0,
+  "sides": 6.0
+ },
+ "linocut": {
+  "amount": 1.0,
+  "angle": 0.0,
+  "scale": 1.0
+ },
+ "luma_mesh_mesh": {
+  "b_lumaInvert": 0.0,
+  "b_wireframe": 0.0,
+  "bandsHeight": 0.0,
+  "bandsScl": 0.4,
+  "gridColor": "#ffffff",
+  "lumaHeight": 0.5,
+  "opacity": 0.0,
+  "time": 0.0,
+  "warpHeight": 0.3,
+  "warpScale": 2.0
+ },
+ "lut": {
+  "amount": 0.5
+ },
+ "mask_blocks": {
+  "amount": 0.5,
+  "b_showMask": 0.0,
+  "scale": 0.2,
+  "speed": 0.25
+ },
+ "mask_draw_mask": {
+  "amount": 1.0,
+  "b_erase": 0.0,
+  "b_invert": 1.0,
+  "b_showMask": 0.0
+ },
+ "mask_mask": {
+  "amount": 1.0,
+  "b_invert": 0.0,
+  "b_showMask": 0.0
+ },
+ "melt": {
+  "amount": 0.3,
+  "scale": 1.0,
+  "speed": 0.1,
+  "time": 0.0
+ },
+ "mirror": {
+  "amount": 1.0,
+  "position2": 0.5,
+  "side": 0.0
+ },
+ "mix": {
+  "amount": 0.5
+ },
+ "ofdisplace": {
+  "amount": 0.5
+ },
+ "ofmap": {
+  "distortion": 0.5,
+  "lambda": 1.0,
+  "offset": 0.1,
+  "persistence": 0.98,
+  "speed": 0.5
+ },
+ "overlay": {
+  "angle": 0.0,
+  "b_maintianAspect": 1.0,
+  "b_repeat": 0.0,
+  "blendModeIndex": 0.0,
+  "opacity": 0.7,
+  "scalex": 1.0,
+  "scaley": 1.0,
+  "sourceAspect": 1.0,
+  "x": 0.5,
+  "y": 0.5
+ },
+ "pixel_sort": {
+  "amount": 0.5,
+  "b_verticalSort": 1.0,
+  "threshold": 0.5
+ },
+ "pixelate": {
+  "amount": 1.0,
+  "pixelsX": 20.0,
+  "pixelsY": 20.0
+ },
+ "polar_pixelate": {
+  "amount": 1.0,
+  "pixelsX": 0.05,
+  "pixelsY": 0.05
+ },
+ "posterize": {
+  "amount": 1.0,
+  "levels": 4.0
+ },
+ "push": {
+  "amount": 0.5,
+  "b_animate": 0.0,
+  "b_rgb": 0.0,
+  "b_showMask": 0.0
+ },
+ "rainbow": {
+  "amount": 0.5,
+  "angle": 0.0,
+  "offset": 0.25,
+  "palette": 1.0,
+  "speed": 1.0,
+  "time": 0.5
+ },
+ "rgbshift": {
+  "amount": 0.1,
+  "angle": 0.0,
+  "mode": 0.0
+ },
+ "scanlines": {
+  "amount": 0.25,
+  "angle": 0.0,
+  "blendModeIndex": 0.0,
+  "count": 1.0,
+  "resolution": [
+   800.0,
+   600.0
+  ]
+ },
+ "shake": {
+  "amount": 0.1,
+  "speed": 0.5,
+  "time": 0.0
+ },
+ "sharpen": {
+  "amount": 0.5,
+  "spread": 0.5
+ },
+ "slices": {
+  "amount": 0.5,
+  "angle": 0.0,
+  "slices": 40.0,
+  "speedH": 1.0,
+  "speedV": 1.0,
+  "time": 0.0
+ },
+ "smear": {
+  "amount": 0.5,
+  "speed": 1.0,
+  "time": 0.0
+ },
+ "soft_glitch": {
+  "amount": 0.2,
+  "speed": 0.5,
+  "time": 0.0
+ },
+ "solarize": {
+  "amount": 1.0,
+  "centerBrightness": 0.5,
+  "colorize": 0.0,
+  "powerCurve": 2.0
+ },
+ "splitter": {
+  "angle": 0.0,
+  "count": 15.0,
+  "offsetV": 0.5,
+  "scale": 0.0,
+  "shift": 0.0
+ },
+ "streak": {
+  "amount": 0.2,
+  "angle": 0.0,
+  "shift": 0.25,
+  "time": 0.0
+ },
+ "stretch": {
+  "amount": 0.5,
+  "angle": 0.0,
+  "center": 0.5,
+  "jaggies": 0.0,
+  "time": 0.0,
+  "wave": 0.0
+ },
+ "strobe": {
+  "amount": 0.3,
+  "random": 0.0,
+  "speed": 8.0,
+  "time": 0.0
+ },
+ "super8": {
+  "burn": 0.5,
+  "dust": 1.0,
+  "frame": 1.0,
+  "roll": 0.3,
+  "seed": 1.0,
+  "time": 1.0
+ },
+ "tile": {
+  "amount": 1.0,
+  "angle": 0.0,
+  "offset": 0.0,
+  "size": 0.5,
+  "speed": 1.0,
+  "time": 0.5
+ },
+ "transform": {
+  "angle": 0.0,
+  "b_repeat": 1.0,
+  "scalex": 1.0,
+  "scaley": 1.0,
+  "x": 0.0,
+  "y": 0.0
+ },
+ "vertical_tilt_shift": {
+  "r": 0.5,
+  "v": 0.01
+ },
+ "vhs": {
+  "bars": 0.5,
+  "staticOpacity": 1.0,
+  "time": 0.0,
+  "timeOpacity": 0.8
+ },
+ "vignette": {
+  "amount": 0.5,
+  "color": "#000000",
+  "feather": 0.5,
+  "roundness": 0.5
+ },
+ "watercolor": {
+  "amount": 0.5,
+  "direction": 0.5,
+  "flow": 0.5
+ },
+ "wave": {
+  "amount": 0.3,
+  "angle": 0.0,
+  "position": 0.5,
+  "size": 0.5
+ },
+ "wobble": {
+  "size": 0.5,
+  "speed": 1.0,
+  "strength": 0.3,
+  "time": 0.0
+ }
+}
