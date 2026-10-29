@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 cpal = "0.18.2"
+midir = "0.11"
 phthora-media = { path = "../media" }
 rustfft = "6.4.1"
 serde = { version = "1.0.229", features = ["derive"] }
