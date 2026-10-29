@@ -79,6 +79,10 @@ Wave                        https://www.shadertoy.com/view/W3X3RB
 Shaders published on Shadertoy without an explicit license fall under
 Shadertoy's default terms (CC BY-NC-SA 3.0) unless their authors state otherwise.
 
+The audio analysis (crates/audio) implements the frequency analysis described for
+the AnalyserNode in the Web Audio API specification (W3C, https://www.w3.org/TR/webaudio/):
+Blackman window, magnitude scaling, smoothing and the decibel-to-byte conversion.
+
 
 5. Rust dependencies
 --------------------

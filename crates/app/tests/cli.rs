@@ -186,3 +186,12 @@ fn bad_options_are_rejected() {
         assert!(!out.status.success(), "{args:?} was accepted");
     }
 }
+
+#[test]
+fn help_lists_the_options() {
+    for args in [&["--help"][..], &["render", "--help"], &["render", "-h"]] {
+        let out = run(bin().args(args));
+        assert!(out.status.success(), "{args:?}");
+        assert!(String::from_utf8_lossy(&out.stdout).contains("--audio FILE|none"), "{args:?}");
+    }
+}

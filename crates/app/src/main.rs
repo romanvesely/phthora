@@ -132,6 +132,10 @@ fn cli_render(args: &[String]) -> Result<(), String> {
                 }
                 return Ok(());
             }
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
             _ if a.starts_with("--") => return Err(format!("unknown option {a}\n{USAGE}")),
             _ => input = Some(a.into()),
         }
