@@ -448,6 +448,15 @@ fn view() -> Mat4 {
     Mat4::from_translation(Vec3::new(0.0, 0.0, -CAMERA_Z))
 }
 
+/// The effect's mouse camera while "Mouse Controls" is on, else the default view.
+fn view_for(e: &ResolvedEffect) -> Mat4 {
+    use phthora_core::orbit::{Orbit, DATA_KEY};
+    match e.data.get(DATA_KEY).and_then(|s| Orbit::parse(s)) {
+        Some(o) if e.b("mouseControls") => glam::camera::rh::view::look_at_mat4(Vec3::from(o.eye()), Vec3::from(o.target), Vec3::Y),
+        _ => view(),
+    }
+}
+
 fn euler_xyz(x: f32, y: f32, z: f32) -> Mat4 {
     Mat4::from_rotation_x(x) * Mat4::from_rotation_y(y) * Mat4::from_rotation_z(z)
 }
@@ -651,7 +660,7 @@ impl GpuEffect for Plane3d {
         let model = Mat4::from_translation(pos)
             * euler_xyz((e.f("xRot") - 0.5) * tau, (e.f("yRot") - 0.5) * tau, (e.f("zRot") - 0.5) * tau)
             * Mat4::from_scale(Vec3::new(e.f("xScale"), e.f("yScale"), 1.0));
-        let mvp = projection(aspect) * view() * group * model;
+        let mvp = projection(aspect) * view_for(e) * group * model;
         let mut data = vec![0u8; self.pipe.layout.size as usize];
         write_mat(&mut data, &self.pipe.layout, "mvp", &mvp);
         self.ubuf.write(rc.ctx, &data);
@@ -694,7 +703,7 @@ impl GpuEffect for LumaMesh {
         let n = |i: usize| phthora_core::noise::loop_noise1d(progress, scale, seeds[i]);
         let (rx, ry, rz) = ((n(0) * rot_rng / 4.0) as f32, (n(1) * rot_rng) as f32, (n(2) * rot_rng / 4.0) as f32);
         let model = euler_xyz(rx, ry, rz) * Mat4::from_scale(Vec3::new(aspect, 1.0, 1.0));
-        let mv = view() * model;
+        let mv = view_for(e) * model;
         let proj = projection(aspect);
         let layout = &self.mesh_pipe.layout;
         let pack = |opacity: f32, wire: bool| {
@@ -755,5 +764,10 @@ mod tests {
         let p = projection(1.0) * view();
         let top = p * glam::Vec4::new(0.0, PLANE_SIZE / 2.0, 0.0, 1.0);
         assert!(((top.y / top.w).abs() - 1.0).abs() < 0.01, "{}", top.y / top.w);
+        // the default mouse camera is the same view
+        let o = phthora_core::orbit::Orbit::default();
+        let la = glam::camera::rh::view::look_at_mat4(Vec3::from(o.eye()), Vec3::from(o.target), Vec3::Y);
+        assert!(la.abs_diff_eq(view(), 1e-3), "{la:?}");
+        assert_eq!(phthora_core::orbit::DEFAULT_DISTANCE, CAMERA_Z);
     }
 }

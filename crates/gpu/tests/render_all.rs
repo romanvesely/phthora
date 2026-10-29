@@ -243,3 +243,34 @@ fn drawing_effects_use_the_canvas() {
     assert_ne!(at(&pushed, 80, 45), at(&img, 80, 45), "stroke displaces");
     assert_eq!(at(&pushed, 80, 10), at(&out, 80, 10), "outside the stroke nothing moves");
 }
+
+#[test]
+fn mouse_camera_from_effect_data() {
+    use phthora_core::orbit::{Orbit, DATA_KEY};
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (96, 54);
+    let mut engine = Engine::new(&ctx, w, h);
+    engine.set_source_rgba(w, h, &test_image(w, h));
+    let t = TimingSettings::default().at_frame(0);
+    let (li, none) = (LiveInputs::default(), HashMap::new());
+    for id in ["transform_3d", "luma_mesh"] {
+        let mut e = EffectInstance::by_id(id).unwrap();
+        let mut render = |e: &EffectInstance| {
+            engine.render(&[e.resolve(&t, &li, &none)], &t);
+            engine.read_output()
+        };
+        let base = render(&e);
+        let mut o = Orbit::default();
+        o.zoom(-8.0);
+        o.rotate(30.0, 10.0, h as f32);
+        e.data.insert(DATA_KEY.into(), o.to_data());
+        assert!(render(&e) == base, "{id}: the camera is ignored while mouse control is off");
+        e.set("mouseControls", phthora_core::Value::Bool(true));
+        let moved = render(&e);
+        assert!(moved != base, "{id}: the stored camera changes the view");
+        e.data.insert(DATA_KEY.into(), Orbit::default().to_data());
+        let back = render(&e);
+        let diff = back.iter().zip(&base).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+        assert!(diff < back.len() / 200, "{id}: default camera looks like the fixed view ({diff} bytes differ)");
+    }
+}

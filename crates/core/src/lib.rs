@@ -5,6 +5,7 @@ pub mod clock;
 pub mod history;
 pub mod modulator;
 pub mod noise;
+pub mod orbit;
 pub mod params;
 pub mod playback;
 pub mod preset;
