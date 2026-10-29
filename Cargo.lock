@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "phthora"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "eframe",
@@ -3182,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "phthora-audio"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "midir",
@@ -3193,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "phthora-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "rand 0.9.5",
  "serde",
@@ -3202,7 +3202,7 @@ dependencies = [
 
 [[package]]
 name = "phthora-gpu"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "bytemuck",
@@ -3223,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "phthora-media"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "libc",
  "serde",
@@ -3233,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "phthora-seg"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "png",
