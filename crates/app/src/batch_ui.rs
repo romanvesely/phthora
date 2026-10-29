@@ -272,7 +272,7 @@ impl BatchUi {
                         egui::ScrollArea::vertical().id_salt("batch_failed").max_height(140.0).show(ui, |ui| {
                             for f in &rep.failed {
                                 let name = f.input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                                let last = f.error.lines().last().unwrap_or(&f.error);
+                                let last = crate::batch::short_error(&f.input, &f.error);
                                 ui.label(egui::RichText::new(format!("{name}: {last}")).color(Color32::from_rgb(240, 120, 110))).on_hover_text(&f.error);
                             }
                         });

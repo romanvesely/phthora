@@ -225,6 +225,13 @@ pub enum Event<'a> {
     Note(&'a str),
 }
 
+/// The last line of a failure, without the input path that ffmpeg puts in front of it
+/// (the report shows the file next to it).
+pub fn short_error<'a>(input: &Path, error: &'a str) -> &'a str {
+    let last = error.lines().last().unwrap_or(error);
+    last.strip_prefix(&format!("{}: ", input.display())).unwrap_or(last)
+}
+
 fn file_label(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
 }
@@ -305,6 +312,13 @@ mod tests {
     fn kind(name: &str) -> (MediaKind, PathBuf) {
         let k = if name.ends_with(".png") || name.ends_with(".jpg") { MediaKind::Image } else if name.ends_with(".gif") { MediaKind::Gif } else { MediaKind::Video };
         (k, PathBuf::from(name))
+    }
+
+    #[test]
+    fn short_error_drops_the_path() {
+        let p = Path::new("/x/bad.mp4");
+        assert_eq!(short_error(p, "could not probe /x/bad.mp4: ffprobe version …\n/x/bad.mp4: Invalid data"), "Invalid data");
+        assert_eq!(short_error(p, "no video stream"), "no video stream");
     }
 
     #[test]

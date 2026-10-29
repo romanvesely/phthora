@@ -284,13 +284,13 @@ fn cli_batch(inputs: &[PathBuf], out_dir: &std::path::Path, shared: &Shared, ov:
         Event::Start { index, total, input } => eprintln!("[{index}/{total}] {} ...", input.display()),
         Event::Note(n) => eprintln!("note: {n}"),
         Event::Done { index, total, out, frames, secs } => eprintln!("[{index}/{total}] wrote {} ({frames} frames, {secs:.1} s)", out.display()),
-        Event::Failed { index, total, input, error } => eprintln!("[{index}/{total}] FAILED {}: {}", name(input), error.lines().last().unwrap_or(error)),
+        Event::Failed { index, total, input, error } => eprintln!("[{index}/{total}] FAILED {}: {}", name(input), batch::short_error(input, error)),
     });
     eprintln!("{} of {} exported to {}", report.done.len(), inputs.len(), out_dir.display());
     if report.failed.is_empty() {
         return Ok(());
     }
-    let list: Vec<String> = report.failed.iter().map(|f| format!("  {}: {}", f.input.display(), f.error.lines().last().unwrap_or(&f.error))).collect();
+    let list: Vec<String> = report.failed.iter().map(|f| format!("  {}: {}", f.input.display(), batch::short_error(&f.input, &f.error))).collect();
     Err(format!("{} of {} inputs failed:\n{}", report.failed.len(), inputs.len(), list.join("\n")))
 }
 
