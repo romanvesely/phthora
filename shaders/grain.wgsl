@@ -4,6 +4,9 @@ struct U {
     b_RGB: f32,
     blendModeIndex: f32,
     seed: f32,
+    typeIndex: f32,
+    speed: f32,
+    scale: f32,
 }
 
 struct FragmentOutput {
@@ -309,6 +312,78 @@ fn gold_noise(xy: vec2<f32>, seed: f32) -> f32 {
     return fract((tan((distance((_e19 * PHI), _e21) * _e23)) * _e26.x));
 }
 
+fn pcg(v: u32) -> u32 {
+    let s = (v * 747796405u) + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+var<private> GRADS: array<vec3<f32>, 12> = array<vec3<f32>, 12>(
+    vec3<f32>(1f, 1f, 0f), vec3<f32>(-1f, 1f, 0f), vec3<f32>(1f, -1f, 0f), vec3<f32>(-1f, -1f, 0f),
+    vec3<f32>(1f, 0f, 1f), vec3<f32>(-1f, 0f, 1f), vec3<f32>(1f, 0f, -1f), vec3<f32>(-1f, 0f, -1f),
+    vec3<f32>(0f, 1f, 1f), vec3<f32>(0f, -1f, 1f), vec3<f32>(0f, 1f, -1f), vec3<f32>(0f, -1f, -1f),
+);
+
+fn simplex_corner(lattice: vec3<i32>, d: vec3<f32>) -> f32 {
+    let t = 0.6f - dot(d, d);
+    if (t < 0f) {
+        return 0f;
+    }
+    let h = pcg(u32(lattice.x) + pcg(u32(lattice.y) + pcg(u32(lattice.z))));
+    let t2 = t * t;
+    return t2 * t2 * dot(GRADS[h % 12u], d);
+}
+
+// 3D simplex noise, about -1..1
+fn simplex3(v: vec3<f32>) -> f32 {
+    let F3 = 0.33333334f;
+    let G3 = 0.16666667f;
+    let cell = floor(v + vec3(dot(v, vec3(F3))));
+    let x0 = v - (cell - vec3(dot(cell, vec3(G3))));
+    var i1: vec3<f32>;
+    var i2: vec3<f32>;
+    if (x0.x >= x0.y) {
+        if (x0.y >= x0.z) {
+            i1 = vec3<f32>(1f, 0f, 0f);
+            i2 = vec3<f32>(1f, 1f, 0f);
+        } else if (x0.x >= x0.z) {
+            i1 = vec3<f32>(1f, 0f, 0f);
+            i2 = vec3<f32>(1f, 0f, 1f);
+        } else {
+            i1 = vec3<f32>(0f, 0f, 1f);
+            i2 = vec3<f32>(1f, 0f, 1f);
+        }
+    } else {
+        if (x0.y < x0.z) {
+            i1 = vec3<f32>(0f, 0f, 1f);
+            i2 = vec3<f32>(0f, 1f, 1f);
+        } else if (x0.x < x0.z) {
+            i1 = vec3<f32>(0f, 1f, 0f);
+            i2 = vec3<f32>(0f, 1f, 1f);
+        } else {
+            i1 = vec3<f32>(0f, 1f, 0f);
+            i2 = vec3<f32>(1f, 1f, 0f);
+        }
+    }
+    let ic = vec3<i32>(cell);
+    let n = simplex_corner(ic, x0)
+        + simplex_corner(ic + vec3<i32>(i1), x0 - i1 + vec3(G3))
+        + simplex_corner(ic + vec3<i32>(i2), x0 - i2 + vec3(2f * G3))
+        + simplex_corner(ic + vec3<i32>(1i), x0 - vec3(1f) + vec3(3f * G3));
+    return 32f * n;
+}
+
+// soft film grain: two octaves of simplex noise, one decorrelated field per channel
+fn film_grain(p: vec3<f32>) -> vec3<f32> {
+    var g: vec3<f32>;
+    for (var c = 0i; c < 3i; c++) {
+        let o = vec3<f32>(f32(c) * 17.31f, f32(c) * 31.77f, f32(c) * 5.13f);
+        let n = (0.65f * simplex3(p + o)) + (0.35f * simplex3(((p + o) * 2.13f) + vec3(7.7f)));
+        g[c] = clamp(0.5f + (0.6f * n), 0f, 1f);
+    }
+    return g;
+}
+
 fn main_1() {
     var orig: vec4<f32>;
     var fc: vec2<f32>;
@@ -321,19 +396,30 @@ fn main_1() {
     orig = _e16;
     let _e19 = gl_FragCoord_1;
     fc = _e19.xy;
-    let _e22 = global.time;
-    let _e23 = global.seed;
-    seed2_ = fract((_e22 + (_e23 * 6294.48f)));
-    let _e29 = fc;
-    let _e30 = seed2_;
-    let _e33 = gold_noise(_e29, (_e30 + 0.1f));
-    let _e34 = fc;
-    let _e35 = seed2_;
-    let _e38 = gold_noise(_e34, (_e35 + 0.2f));
-    let _e39 = fc;
-    let _e40 = seed2_;
-    let _e43 = gold_noise(_e39, (_e40 + 0.3f));
-    grain = vec3<f32>(_e33, _e38, _e43);
+    if (global.typeIndex > 0.5f) {
+        // film: soft noise over (position / scale, time * speed)
+        let sc = max(global.scale, 0.01f) * 1.5f;
+        grain = film_grain(vec3<f32>(fc / vec2(sc), (global.time * global.speed * 40f) + (global.seed * 100f)));
+    } else {
+        // digital: white noise; scale > 1 makes it blockier
+        let sc = max(global.scale, 1f);
+        if (sc != 1f) {
+            fc = (floor(fc / vec2(sc)) + vec2(0.5f)) * sc;
+        }
+        let _e22 = global.time;
+        let _e23 = global.seed;
+        seed2_ = fract(((_e22 * global.speed) + (_e23 * 6294.48f)));
+        let _e29 = fc;
+        let _e30 = seed2_;
+        let _e33 = gold_noise(_e29, (_e30 + 0.1f));
+        let _e34 = fc;
+        let _e35 = seed2_;
+        let _e38 = gold_noise(_e34, (_e35 + 0.2f));
+        let _e39 = fc;
+        let _e40 = seed2_;
+        let _e43 = gold_noise(_e39, (_e40 + 0.3f));
+        grain = vec3<f32>(_e33, _e38, _e43);
+    }
     let _e46 = global.b_RGB;
     if !((_e46 > 0.5f)) {
         let _e50 = grain;

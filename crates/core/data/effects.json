@@ -1980,6 +1980,20 @@
   "time": false,
   "params": [
    {
+    "key": "mode",
+    "label": "Mode",
+    "type": "combo",
+    "values": [
+     "Bayer 4x4",
+     "Bayer 2x2",
+     "Bayer 8x8",
+     "Blue Noise",
+     "Random",
+     "Cluster Dot"
+    ],
+    "default": "Bayer 4x4"
+   },
+   {
     "key": "amount",
     "label": "amount",
     "type": "float",
@@ -2008,6 +2022,12 @@
     "step": 0.01,
     "default": 0,
     "rand": "full"
+   },
+   {
+    "key": "animate",
+    "label": "Animate",
+    "type": "bool",
+    "default": false
    }
   ]
  },
@@ -2062,9 +2082,17 @@
      "Luza",
      "Sharya",
      "Ukhta",
-     "Donetsk"
+     "Donetsk",
+     "Custom"
     ],
     "default": "Barysh"
+   },
+   {
+    "key": "customChars",
+    "label": "Custom Chars",
+    "type": "text",
+    "multiline": false,
+    "default": " .:-=+*%@#"
    }
   ]
  },
@@ -2853,6 +2881,16 @@
   "time": true,
   "params": [
    {
+    "key": "type",
+    "label": "Type",
+    "type": "combo",
+    "values": [
+     "Digital",
+     "Film"
+    ],
+    "default": "Digital"
+   },
+   {
     "key": "amount",
     "label": "amount",
     "type": "float",
@@ -2879,6 +2917,26 @@
      "multiply"
     ],
     "default": "softlight"
+   },
+   {
+    "key": "speed",
+    "label": "Speed",
+    "type": "float",
+    "min": 0,
+    "max": 4,
+    "step": 0.01,
+    "default": 1,
+    "no_random": true
+   },
+   {
+    "key": "scale",
+    "label": "Scale",
+    "type": "float",
+    "min": 0.25,
+    "max": 8,
+    "step": 0.01,
+    "default": 1,
+    "no_random": true
    },
    {
     "key": "seed",
@@ -3509,6 +3567,23 @@
     "step": 0.01,
     "default": 0.4,
     "rand": "full"
+   },
+   {
+    "key": "maskFrom",
+    "label": "Mask From",
+    "type": "combo",
+    "values": [
+     "Effect Input",
+     "Source"
+    ],
+    "default": "Effect Input",
+    "no_random": true
+   },
+   {
+    "key": "showMask",
+    "label": "Show Mask",
+    "type": "bool",
+    "default": false
    }
   ]
  }

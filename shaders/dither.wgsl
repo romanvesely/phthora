@@ -2,6 +2,9 @@ struct U {
     amount: f32,
     colorize: f32,
     scale: f32,
+    modeIndex: f32,
+    b_animate: f32,
+    animFrame: f32,
 }
 
 struct FragmentOutput {
@@ -16,7 +19,12 @@ var<uniform> global: U;
 var tDiffuse_t: texture_2d<f32>;
 @group(0) @binding(2) 
 var tDiffuse_s: sampler;
+@group(0) @binding(3) 
+var tNoise_t: texture_2d<f32>;
 var<private> gl_FragCoord_1: vec4<f32>;
+
+const PI: f32 = 3.1415927f;
+const NOISE_SIZE: i32 = 64i;
 
 fn luma(color: vec3<f32>) -> f32 {
     var color_1: vec3<f32>;
@@ -124,20 +132,76 @@ fn dither(position: vec2<f32>, brightness: f32) -> f32 {
     return _e113;
 }
 
+fn pcg(v: u32) -> u32 {
+    let s = (v * 747796405u) + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+// 0..1 hash of a cell and a frame
+fn hash_cell(c: vec2<i32>, f: u32) -> f32 {
+    let h = pcg(u32(c.x) ^ pcg(u32(c.y) + pcg(f)));
+    return (f32(h >> 8u) + 0.5f) / 16777216f;
+}
+
+// Bayer matrix of 2^levels per side: threshold in (0, 1]
+fn bayer(c: vec2<i32>, levels: i32) -> f32 {
+    var v = 0u;
+    for (var i = 0i; i < levels; i++) {
+        let bit = u32((levels - 1i) - i);
+        let xb = u32((c.x >> bit) & 1i);
+        let yb = u32((c.y >> bit) & 1i);
+        v += (((xb ^ yb) << 1u) | yb) << u32(2i * i);
+    }
+    return (f32(v) + 1f) / f32(1u << u32(2i * levels));
+}
+
+// 45 degree clustered-dot screen: lowest threshold at the dot centres
+fn cluster_dot(p: vec2<f32>) -> f32 {
+    let u = (p.x + p.y) / 8f;
+    let v = (p.x - p.y) / 8f;
+    let t = ((cos(2f * PI * u) + cos(2f * PI * v)) * 0.25f) + 0.5f;
+    return ((1f - t) * 0.98f) + 0.02f;
+}
+
 fn dither_1(position_2: vec2<f32>, color_2: vec3<f32>, scale: f32) -> vec3<f32> {
     var position_3: vec2<f32>;
     var color_3: vec3<f32>;
     var scale_1: f32;
+    var frame = 0u;
+    var shift = vec2<i32>(0i, 0i);
+    var limit: f32;
 
     position_3 = position_2;
     color_3 = color_2;
     scale_1 = scale;
-    let _e16 = position_3;
-    let _e17 = scale_1;
-    let _e20 = color_3;
-    let _e21 = luma(_e20);
-    let _e22 = dither((_e16 / vec2(_e17)), _e21);
-    return vec3(_e22);
+    let lum = luma(color_3);
+    let p = position_3 / vec2(scale_1);
+    // animation: the pattern jumps by a hashed offset every frame
+    if (global.b_animate > 0.5f) {
+        frame = u32(global.animFrame);
+        shift = vec2<i32>(i32(pcg((frame * 2u) + 1u) & 63u), i32(pcg((frame * 2u) + 2u) & 63u));
+    }
+    let mode = i32(global.modeIndex + 0.5f);
+    if (mode == 0i) {
+        // the original 4x4 table
+        return vec3(dither(p + vec2<f32>(shift), lum));
+    }
+    let cell = vec2<i32>(floor(p));
+    if (mode == 1i) {
+        limit = bayer(cell + shift, 1i);
+    } else if (mode == 2i) {
+        limit = bayer(cell + shift, 3i);
+    } else if (mode == 3i) {
+        // blue noise: 12-bit rank split over red (high) and green (low nibble)
+        let t = textureLoad(tNoise_t, (cell + shift) & vec2<i32>(NOISE_SIZE - 1i), 0);
+        limit = (((round(t.x * 255f) * 16f) + (round(t.y * 255f) / 16f)) + 1f) / 4096f;
+    } else if (mode == 4i) {
+        limit = hash_cell(cell, frame);
+    } else {
+        limit = cluster_dot(p + vec2<f32>(shift));
+    }
+    return vec3(select(1f, 0f, lum < limit));
 }
 
 fn main_1() {

@@ -38,6 +38,9 @@ impl Align {
     }
 }
 
+/// Upper limit of characters `TextCanvas::sort_by_coverage` keeps.
+pub const MAX_SORTED: usize = 128;
+
 /// A font chain: the first font that has a glyph for a character is used.
 pub struct Fonts<'a>(pub &'a [FontData]);
 
@@ -183,6 +186,11 @@ impl TextCanvas {
         Glyphs::new(fonts).layout(text, size).1
     }
 
+    /// Total pixel coverage (alpha) as a count of fully covered pixels.
+    pub fn coverage(&self) -> f32 {
+        self.pixmap.data().as_chunks::<4>().0.iter().map(|p| p[3] as f32).sum::<f32>() / 255.0
+    }
+
     /// Draw one line of text. `y` is the top of the em box.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text(
@@ -241,6 +249,29 @@ impl TextCanvas {
             }
         }
         out
+    }
+
+    /// Distinct printable characters of `chars` (at most `MAX_SORTED`), ordered from least to
+    /// most covered cell when drawn at `size`; equal coverage keeps the input order.
+    pub fn sort_by_coverage(fonts: &[FontData], size: f32, chars: &str) -> String {
+        let mut seen: Vec<char> = Vec::new();
+        for c in chars.chars() {
+            if !c.is_control() && !seen.contains(&c) && seen.len() < MAX_SORTED {
+                seen.push(c);
+            }
+        }
+        let cell = size.ceil() as u32;
+        let mut scored: Vec<(f32, usize, char)> = seen
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                let mut t = TextCanvas::new(cell, cell);
+                t.draw_text(fonts, size, &c.to_string(), 0.0, 0.0, Align::Left, Some([255, 255, 255]), None, true);
+                (t.coverage(), i, c)
+            })
+            .collect();
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        scored.into_iter().map(|s| s.2).collect()
     }
 
     /// Greedy word wrap like the reference caption layout.
