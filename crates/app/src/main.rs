@@ -23,7 +23,7 @@ options for render:
                          .webp                      animated for video input, --duration or --fps, else a still
                          .png .jpg                  one still image
                          DIR/ or name-%05d.png      PNG sequence (a folder gets <folder>-00001.png ...)
-                       .webp, .apng, .png and sequences keep transparency (--background transparent)
+                       .webm, .gif, .webp, .apng, .png and sequences keep transparency (--background transparent)
   --duration SEC       output length (default: one pass through the input, 4 s for stills)
   --fps N              frame rate (default: input rate or 30; GIF at most 50)
   --size WxH           output size, even numbers up to 4096 (default: input size)
