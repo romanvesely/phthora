@@ -190,7 +190,7 @@ pub fn parse_hex(s: &str) -> [f32; 3] {
         let r = (n >> 8) & 0xf;
         let g = (n >> 4) & 0xf;
         let b = n & 0xf;
-        ((r * 17) << 16 | (g * 17) << 8 | b * 17, 6)
+        ((r * 17) << 16 | (g * 17) << 8 | (b * 17), 6)
     } else {
         (n, h.len())
     };

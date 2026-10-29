@@ -43,6 +43,21 @@ pub fn registry() -> &'static [EffectDesc] {
     })
 }
 
+/// Effects described in the catalog but not implemented yet (live drawing and audio input).
+pub const NOT_AVAILABLE: &[&str] = &["audio_visualizer", "push_draw", "mask_draw"];
+
+impl EffectDesc {
+    /// Whether the effect can be added from the UI and the command line.
+    pub fn available(&self) -> bool {
+        !NOT_AVAILABLE.contains(&self.id.as_str())
+    }
+}
+
+/// Effects that can be added, in catalog order.
+pub fn available() -> impl Iterator<Item = &'static EffectDesc> {
+    registry().iter().filter(|d| d.available())
+}
+
 pub fn find(id: &str) -> Option<&'static EffectDesc> {
     registry().iter().find(|e| e.id == id)
 }

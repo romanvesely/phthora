@@ -46,13 +46,12 @@ pub fn find_asset_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PHTHORA_ASSETS") {
         cands.push(p.into());
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(d) = exe.parent() {
             cands.push(d.join("assets"));
             cands.push(d.join("../share/phthora/assets"));
             cands.push(d.join("../../assets"));
         }
-    }
     cands.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")));
     cands.into_iter().find(|p| p.join("video").is_dir())
 }
@@ -69,8 +68,8 @@ pub fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     let src = &buf[..info.buffer_size()];
     let rgba = match info.color_type {
         png::ColorType::Rgba => src.to_vec(),
-        png::ColorType::Rgb => src.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => src.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Rgb => src.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => src.as_chunks::<2>().0.iter().flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
         png::ColorType::Grayscale => src.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         png::ColorType::Indexed => return None,
     };
@@ -126,12 +125,11 @@ impl VideoTexture {
 
     pub fn update(&mut self, ctx: &GpuContext, t: f64) {
         let Some(src) = self.src.as_mut() else { return };
-        if let Some((idx, data)) = src.frame_at(t) {
-            if self.last != Some(idx) {
+        if let Some((idx, data)) = src.frame_at(t)
+            && self.last != Some(idx) {
                 upload(ctx, &self.target, data, true);
                 self.last = Some(idx);
             }
-        }
     }
 }
 

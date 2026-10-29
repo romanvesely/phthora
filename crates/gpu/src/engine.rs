@@ -123,7 +123,7 @@ impl Engine {
                 });
                 self.input_ubuf.write(&self.ctx, &data);
             }
-            let tex = |n: &str| (n == "src").then(|| TexInput { view: &src.view, sampler: SamplerKind::LinearClamp });
+            let tex = |n: &str| (n == "src").then_some(TexInput { view: &src.view, sampler: SamplerKind::LinearClamp });
             run_pass(&self.ctx, &mut enc, &self.input_shader, Some(&self.input_ubuf.buf), &tex, &self.blank.view, &self.base.view, Some(clear));
         } else {
             self.base.clear_in(&mut enc, clear);

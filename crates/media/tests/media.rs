@@ -79,7 +79,7 @@ fn alpha_frame(i: u32, w: u32, h: u32) -> Vec<u8> {
 
 fn opaque_frame(i: u32, w: u32, h: u32) -> Vec<u8> {
     let mut f = alpha_frame(i, w, h);
-    f.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    f.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
     f
 }
 
@@ -212,7 +212,7 @@ fn decoder_native_scale_and_start() {
     assert_eq!(frames[0].data.len(), 64 * 48 * 4);
     assert_eq!(frames[7].index, 7);
     assert!((frames[25].pts - 1.0).abs() < 1e-9);
-    assert!(frames.iter().all(|f| f.pass == 0 && f.data.chunks_exact(4).all(|p| p[3] == 255)));
+    assert!(frames.iter().all(|f| f.pass == 0 && f.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255)));
 
     let scaled = drain(open(&src, 32, 24, DecodeOptions::default()));
     assert_eq!(scaled.len(), 50);

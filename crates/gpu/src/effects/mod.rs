@@ -47,19 +47,16 @@ pub fn base_uniform(e: &ResolvedEffect, rc: &RenderCtx, key: &str) -> Option<UVa
     if let Some(v) = e.values.get(key) {
         return value_to_uval(v);
     }
-    if let Some(b) = key.strip_prefix("b_") {
-        if let Some(v) = e.values.get(b) {
+    if let Some(b) = key.strip_prefix("b_")
+        && let Some(v) = e.values.get(b) {
             return Some(UVal::F(v.as_bool() as i32 as f32));
         }
-    }
     // combo index: `blendModeIndex` for combo `blendMode`
-    if let Some(base) = key.strip_suffix("Index") {
-        if let (Some(p), Some(v)) = (e.desc.param(base), e.values.get(base)) {
-            if let ParamKind::Combo { values, .. } = &p.kind {
+    if let Some(base) = key.strip_suffix("Index")
+        && let (Some(p), Some(v)) = (e.desc.param(base), e.values.get(base))
+            && let ParamKind::Combo { values, .. } = &p.kind {
                 return Some(UVal::F(values.iter().position(|x| x == v.as_str()).map(|i| i as f32).unwrap_or(-1.0)));
             }
-        }
-    }
     // color stops -> color1..6, stop1..6, numStops
     if let Some(stops) = e.values.values().find_map(|v| if let Value::Stops(s) = v { Some(s) } else { None }) {
         if key == "numStops" {

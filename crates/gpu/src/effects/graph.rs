@@ -110,11 +110,10 @@ impl History {
 
 impl GpuEffect for History {
     fn render(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect, input: &Target, _orig: &Target, out: &Target) {
-        if ensure(&mut self.prev, rc.ctx, rc.width, rc.height, "history") {
-            if let HistoryKind::PixelSort { frame, .. } = &mut self.kind {
+        if ensure(&mut self.prev, rc.ctx, rc.width, rc.height, "history")
+            && let HistoryKind::PixelSort { frame, .. } = &mut self.kind {
                 *frame = 0;
             }
-        }
         let frame_val = match &mut self.kind {
             HistoryKind::PixelSort { frame, reset } => {
                 let r = e.triggers.get("reset").copied().unwrap_or(0);
@@ -481,7 +480,7 @@ fn plane(size: f32, segs: u32) -> (Vec<[f32; 5]>, Vec<u32>) {
 
 /// Wireframe lines from triangles: every triangle edge, shared edges included twice.
 fn wire_indices(tris: &[u32]) -> Vec<u32> {
-    tris.chunks_exact(3).flat_map(|t| [t[0], t[1], t[1], t[2], t[2], t[0]]).collect()
+    tris.as_chunks::<3>().0.iter().flat_map(|t| [t[0], t[1], t[1], t[2], t[2], t[0]]).collect()
 }
 
 struct GeoPipeline {

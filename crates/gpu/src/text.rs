@@ -78,11 +78,10 @@ impl<'a> Glyphs<'a> {
     fn kern(&self, i: usize, a: ttf_parser::GlyphId, b: ttf_parser::GlyphId) -> f32 {
         let Some(kern) = self.faces[i].tables().kern else { return 0.0 };
         for st in kern.subtables {
-            if st.horizontal && !st.variable {
-                if let Some(v) = st.glyphs_kerning(a, b) {
+            if st.horizontal && !st.variable
+                && let Some(v) = st.glyphs_kerning(a, b) {
                     return v as f32;
                 }
-            }
         }
         0.0
     }
@@ -95,11 +94,10 @@ impl<'a> Glyphs<'a> {
         for c in text.chars() {
             let Some((i, g)) = self.lookup(c) else { continue };
             let s = self.scale(i, size);
-            if let Some((pi, pg)) = prev {
-                if pi == i {
+            if let Some((pi, pg)) = prev
+                && pi == i {
                     x += self.kern(i, pg, g) * s;
                 }
-            }
             out.push((i, g, x));
             x += self.faces[i].glyph_hor_advance(g).unwrap_or(0) as f32 * s;
             prev = Some((i, g));
@@ -234,7 +232,7 @@ impl TextCanvas {
     /// Straight-alpha RGBA rows, top row first.
     pub fn to_rgba_straight(&self) -> Vec<u8> {
         let mut out = self.pixmap.data().to_vec();
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             let a = px[3] as u32;
             if a != 0 && a != 255 {
                 for c in &mut px[..3] {

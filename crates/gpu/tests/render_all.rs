@@ -88,7 +88,7 @@ fn dump_effects() {
         }
         let mut out = engine.read_output();
         // un-premultiply for viewing
-        for p in out.chunks_exact_mut(4) {
+        for p in out.as_chunks_mut::<4>().0 {
             let a = p[3] as u32;
             if a > 0 && a < 255 {
                 for c in &mut p[..3] {
