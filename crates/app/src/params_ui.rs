@@ -31,6 +31,20 @@ pub struct ParamCtx<'a> {
 
 const LABEL_W: f32 = 92.0;
 
+/// Mouse wheel movement this frame in lines (up is positive). Summed from the raw events:
+/// the smoothed scroll delta stays zero for some Wayland wheel events.
+pub fn wheel_lines(i: &egui::InputState) -> f32 {
+    i.events
+        .iter()
+        .map(|ev| match ev {
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, .. } => delta.y / 40.0,
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Page, delta, .. } => delta.y * 10.0,
+            _ => 0.0,
+        })
+        .sum()
+}
+
 fn label(ui: &mut egui::Ui, text: &str) {
     ui.add_sized([LABEL_W, 18.0], egui::Label::new(egui::RichText::new(text).small()).truncate());
 }
@@ -91,6 +105,20 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                         let r = ui.add_enabled(!disabled && !modulated, s);
                         if r.changed() || rd.changed() {
                             changed = true;
+                        }
+                        // wheel over the slider: one step per notch (1 % of the range for fine sliders)
+                        if r.hovered() && !disabled && !modulated {
+                            let lines = ui.input(wheel_lines);
+                            if lines != 0.0 {
+                                let unit = if *step >= 0.01 * (*max - *min) { step.max(f32::EPSILON) } else { 0.01 * (*max - *min) };
+                                v = (v + lines.signum() * lines.abs().ceil() * unit).clamp(*min, *max);
+                                if *step > 0.0 {
+                                    v = min + ((v - min) / step).round() * step;
+                                }
+                                changed = true;
+                                // the stack must not scroll at the same time
+                                ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+                            }
                         }
                         if r.double_clicked() {
                             e.reset(&key);

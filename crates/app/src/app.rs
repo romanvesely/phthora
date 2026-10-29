@@ -43,6 +43,22 @@ const LIVE_SIZE: (u32, u32) = (1280, 720);
 /// A running export: worker thread, progress, start time.
 type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
 
+/// A modal message or question.
+enum Dialog {
+    Error { title: String, text: String },
+    Confirm { text: String, yes: &'static str, action: Confirm },
+    /// name for a new preset folder
+    NewFolder(String),
+}
+
+/// What a confirmed question does.
+#[derive(Clone)]
+enum Confirm {
+    DeletePreset(PathBuf),
+    OverwritePreset(String),
+    Quit,
+}
+
 /// Group edits from the stack UI, applied after drawing it.
 enum GroupOp {
     Make(u64),
@@ -128,6 +144,12 @@ pub struct PhthoraApp {
     audio: AudioState,
     settings: Settings,
     show_settings: bool,
+    show_about: bool,
+    dialog: Option<Dialog>,
+    /// the user confirmed quitting while an export runs
+    quit_ok: bool,
+    /// preset subfolder shown, stepped through and saved into (None: all presets)
+    preset_folder: Option<String>,
     status: String,
     status_time: Option<Instant>,
     renaming: Option<(u64, String)>,
@@ -192,6 +214,10 @@ impl PhthoraApp {
             audio: AudioState::new(settings.audio.clone()),
             settings,
             show_settings: false,
+            show_about: false,
+            dialog: None,
+            quit_ok: false,
+            preset_folder: None,
             status: String::new(),
             status_time: None,
             renaming: None,
@@ -257,15 +283,7 @@ impl PhthoraApp {
         // wheel notches (a notch is a line, about 40 points of touchpad scrolling): 5 % each
         let wheel = if resp.hovered() {
             ui.input(|i| {
-                i.events
-                    .iter()
-                    .map(|ev| match ev {
-                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
-                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, .. } => delta.y / 40.0,
-                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Page, delta, .. } => delta.y * 10.0,
-                        _ => 0.0,
-                    })
-                    .sum::<f32>()
+                params_ui::wheel_lines(i)
             })
         } else {
             0.0
@@ -352,6 +370,17 @@ impl PhthoraApp {
     fn notify(&mut self, s: impl Into<String>) {
         self.status = s.into();
         self.status_time = Some(Instant::now());
+        tracing::info!("{}", self.status);
+    }
+
+    /// Show an error in a dialog (and the log).
+    fn error(&mut self, title: &str, text: impl Into<String>) {
+        let text = text.into();
+        tracing::error!("{title}: {text}");
+        // keep long tool output readable: its last lines say what went wrong
+        let lines: Vec<&str> = text.lines().collect();
+        let text = lines[lines.len().saturating_sub(12)..].join("\n");
+        self.dialog = Some(Dialog::Error { title: title.into(), text });
     }
 
     // ------------------------------------------------------------ input
@@ -360,7 +389,7 @@ impl PhthoraApp {
         let info = match phthora_media::probe(path) {
             Ok(i) => i,
             Err(e) => {
-                self.notify(format!("Cannot open {}: {e}", path.display()));
+                self.error("Cannot open the file", format!("{}: {e}", path.display()));
                 return;
             }
         };
@@ -375,7 +404,7 @@ impl PhthoraApp {
                     self.export.format = Format::Png;
                 }
                 Err(e) => {
-                    self.notify(format!("Cannot load image: {e}"));
+                    self.error("Cannot load the image", e.to_string());
                     return;
                 }
             }
@@ -459,32 +488,39 @@ impl PhthoraApp {
                     self.notify(format!("Preset {} loaded with warnings: {}", self.preset_name, warnings.join("; ")));
                 }
             }
-            Err(e) => self.notify(format!("Cannot load preset: {e}")),
+            Err(e) => self.error("Cannot load the preset", format!("{}: {e}", path.display())),
         }
+    }
+
+    /// Indices of the presets in the current folder.
+    fn folder_presets(&self) -> Vec<usize> {
+        (0..self.presets.len()).filter(|&i| self.preset_folder.is_none() || store::preset_folder(&self.presets[i]) == self.preset_folder).collect()
     }
 
     fn step_preset(&mut self, d: i64) {
-        if self.presets.is_empty() {
+        let list = self.folder_presets();
+        if list.is_empty() {
             return;
         }
-        let n = self.presets.len() as i64;
-        let i = match self.preset_idx {
-            Some(i) => (i as i64 + d).rem_euclid(n),
+        let n = list.len() as i64;
+        let k = match self.preset_idx.and_then(|i| list.iter().position(|&j| j == i)) {
+            Some(k) => (k as i64 + d).rem_euclid(n),
             None => if d >= 0 { 0 } else { n - 1 },
         };
-        self.load_preset(i as usize);
+        self.load_preset(list[k as usize]);
     }
 
     fn random_preset(&mut self) {
-        if self.presets.is_empty() {
+        let list = self.folder_presets();
+        if list.is_empty() {
             return;
         }
         use rand::Rng;
-        let mut i = rand::rng().random_range(0..self.presets.len());
-        if self.presets.len() > 1 && Some(i) == self.preset_idx {
-            i = (i + 1) % self.presets.len();
+        let mut k = rand::rng().random_range(0..list.len());
+        if list.len() > 1 && Some(list[k]) == self.preset_idx {
+            k = (k + 1) % list.len();
         }
-        self.load_preset(i);
+        self.load_preset(list[k]);
     }
 
     fn save_preset(&mut self, name: &str) {
@@ -493,16 +529,25 @@ impl PhthoraApp {
             self.notify("Preset name: letters, digits, space, - and _ only");
             return;
         }
-        let path = store::preset_path(&name);
+        let path = store::preset_path(self.preset_folder.as_deref(), &name);
+        if path.exists() {
+            self.dialog = Some(Dialog::Confirm { text: format!("Replace the preset \"{}\"?", store::preset_label(&path)), yes: "Replace", action: Confirm::OverwritePreset(name) });
+            return;
+        }
+        self.write_preset(&name);
+    }
+
+    fn write_preset(&mut self, name: &str) {
+        let path = store::preset_path(self.preset_folder.as_deref(), name);
         let json = phthora_core::preset::to_json(&self.chain);
         match std::fs::write(&path, json) {
             Ok(()) => {
                 self.rescan_presets();
                 self.preset_idx = self.presets.iter().position(|p| *p == path);
-                self.preset_name = name.clone();
+                self.preset_name = name.to_string();
                 self.notify(format!("Saved preset {name}"));
             }
-            Err(e) => self.notify(format!("Cannot save preset: {e}")),
+            Err(e) => self.error("Cannot save the preset", format!("{}: {e}", path.display())),
         }
     }
 
@@ -513,14 +558,18 @@ impl PhthoraApp {
         };
         match std::fs::write(&path, phthora_core::preset::to_json(&self.chain)) {
             Ok(()) => self.notify(format!("Updated preset {}", store::preset_label(&path))),
-            Err(e) => self.notify(format!("Cannot save preset: {e}")),
+            Err(e) => self.error("Cannot save the preset", format!("{}: {e}", path.display())),
         }
     }
 
     fn delete_preset(&mut self) {
         let Some(path) = self.preset_idx.and_then(|i| self.presets.get(i).cloned()) else { return };
-        if std::fs::remove_file(&path).is_ok() {
-            self.notify(format!("Deleted preset {}", store::preset_label(&path)));
+        self.dialog = Some(Dialog::Confirm { text: format!("Delete the preset \"{}\"?", store::preset_label(&path)), yes: "Delete", action: Confirm::DeletePreset(path) });
+    }
+
+    fn remove_preset_file(&mut self, path: &Path) {
+        if std::fs::remove_file(path).is_ok() {
+            self.notify(format!("Deleted preset {}", store::preset_label(path)));
             self.preset_idx = None;
             self.preset_name.clear();
             self.rescan_presets();
@@ -581,7 +630,7 @@ impl PhthoraApp {
             match h.join() {
                 Ok(Ok(p)) => self.notify(format!("Exported {} in {:.1} s", p.display(), t0.elapsed().as_secs_f32())),
                 Ok(Err(e)) if e == "cancelled" => self.notify("Export cancelled"),
-                Ok(Err(e)) => self.notify(format!("Export failed: {}", e.lines().last().unwrap_or(&e))),
+                Ok(Err(e)) => self.error("Export failed", e),
                 Err(_) => self.notify("Export crashed"),
             }
         }
@@ -650,7 +699,7 @@ impl PhthoraApp {
         let Source::Live(cam) = &self.source else { return };
         if let Some(e) = cam.error() {
             self.stop_webcam();
-            self.notify(format!("Webcam stopped: {}", e.lines().last().unwrap_or(&e)));
+            self.error("The webcam stopped", e);
             return;
         }
         let Some((seq, frame)) = cam.latest() else {
@@ -686,7 +735,7 @@ impl PhthoraApp {
         let size = self.engine.size();
         if self.vcam.as_ref().is_some_and(|(v, _)| v.size() != size || v.error().is_some()) {
             if let Some(e) = self.vcam.as_ref().and_then(|(v, _)| v.error()) {
-                self.notify(format!("Virtual camera: {}", e.lines().last().unwrap_or(&e)));
+                self.error("The virtual camera stopped", e);
                 self.settings.virtual_cam = None;
             }
             self.vcam = None;
@@ -696,7 +745,7 @@ impl PhthoraApp {
                 match VirtualCam::open(&dev, size.0, size.1, 30.0) {
                     Ok(v) => self.vcam = Some((v, Readback::new(&self.engine.ctx, &self.engine.lib, size.0, size.1))),
                     Err(e) => {
-                        self.notify(format!("Virtual camera: {e}"));
+                        self.error("Cannot start the virtual camera", e.to_string());
                         self.settings.virtual_cam = None;
                     }
                 }
@@ -724,7 +773,7 @@ impl PhthoraApp {
             _ => match cams.first() {
                 Some(d) => d.path.clone(),
                 None => {
-                    self.notify("No webcam found");
+                    self.error("No webcam found", "Connect a camera and try again. Cameras are looked up in /dev/video*.");
                     return;
                 }
             },
@@ -753,7 +802,7 @@ impl PhthoraApp {
                     self.notify("Webcam on");
                 }
             }
-            Err(e) => self.notify(format!("Cannot start the webcam: {e}")),
+            Err(e) => self.error("Cannot start the webcam", e.to_string()),
         }
     }
 
@@ -796,7 +845,7 @@ impl PhthoraApp {
             }
             None => {
                 self.engine.flip_x = self.settings.flip_x;
-                self.notify("The recording could not be written");
+                self.error("The recording could not be written", "ffmpeg did not finish the file. Details are in the log.");
             }
         }
     }
@@ -839,6 +888,21 @@ impl PhthoraApp {
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::O))) {
             self.pick_input();
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::Comma))) {
+            self.show_settings = !self.show_settings;
+        }
+        // Esc closes the topmost window (dialogs close themselves)
+        if self.dialog.is_none() && !typing && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            if self.show_about {
+                self.show_about = false;
+            } else if self.export.open && self.export.running.is_none() {
+                self.export.open = false;
+            } else if self.show_settings {
+                self.show_settings = false;
+            } else if self.audio.open {
+                self.audio.open = false;
+            }
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::W))) {
             if matches!(self.source, Source::Live(_)) { self.stop_webcam() } else { self.start_webcam(None) }
         }
@@ -875,8 +939,10 @@ impl PhthoraApp {
         let digits = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
         for (i, k) in digits.into_iter().enumerate() {
             if ctx.input_mut(|inp| inp.consume_shortcut(&cmd(k))) {
-                // Ctrl+1..9 load the first nine presets, Ctrl+0 the tenth
-                self.load_preset((i + 9) % 10);
+                // Ctrl+1..9 load the first nine presets of the folder, Ctrl+0 the tenth
+                if let Some(&p) = self.folder_presets().get((i + 9) % 10) {
+                    self.load_preset(p);
+                }
             }
         }
     }
@@ -902,6 +968,40 @@ impl PhthoraApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
+            ui.menu_button("☰", |ui| {
+                if ui.button("Load default effects").on_hover_text("Every effect, switched off").clicked() {
+                    self.load_defaults();
+                }
+                if ui.add(egui::Button::new("Disable all effects").shortcut_text("Ctrl+D")).clicked() {
+                    self.chain.disable_all();
+                }
+                if ui.button("Remove all effects").clicked() {
+                    self.chain.clear_unlocked();
+                }
+                if ui.add(egui::Button::new("Randomize effect order").shortcut_text("Ctrl+E")).clicked() {
+                    self.chain.shuffle();
+                }
+                ui.separator();
+                if ui.button("New preset folder…").clicked() {
+                    self.dialog = Some(Dialog::NewFolder(String::new()));
+                }
+                if ui.button("Open preset folder").clicked() {
+                    open_path(&store::preset_dir());
+                }
+                if ui.button("Open output folder").clicked() {
+                    open_path(&self.settings.export_dir());
+                }
+                if ui.button("Open log folder").clicked() {
+                    open_path(&store::log_dir());
+                }
+                ui.separator();
+                if ui.add(egui::Button::new("Settings").shortcut_text("Ctrl+,")).clicked() {
+                    self.show_settings = true;
+                }
+                if ui.button("About phthora").clicked() {
+                    self.show_about = true;
+                }
+            });
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 self.pick_input();
             }
@@ -981,6 +1081,28 @@ impl PhthoraApp {
         // Buttons are laid out from the right first so the combo box and the name field
         // take exactly the remaining width (a fixed estimate makes the panel grow every frame).
         let mut pick = None;
+        let folders = store::preset_folders();
+        if !folders.is_empty() || self.preset_folder.is_some() {
+            ui.horizontal(|ui| {
+                ui.label("Folder");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("+").on_hover_text("New folder").clicked() {
+                        self.dialog = Some(Dialog::NewFolder(String::new()));
+                    }
+                    let w = (ui.available_width() - 4.0).max(40.0);
+                    let mut f = self.preset_folder.clone();
+                    egui::ComboBox::from_id_salt("preset_folder").selected_text(f.clone().unwrap_or_else(|| "All presets".into())).width(w).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut f, None, "All presets");
+                        for name in &folders {
+                            ui.selectable_value(&mut f, Some(name.clone()), name);
+                        }
+                    });
+                    if f != self.preset_folder {
+                        self.preset_folder = f;
+                    }
+                });
+            });
+        }
         ui.horizontal(|ui| {
             ui.label("Preset");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -995,11 +1117,12 @@ impl PhthoraApp {
                 }
                 let label = self.preset_idx.and_then(|i| self.presets.get(i)).map(|p| store::preset_label(p)).unwrap_or_else(|| "–".into());
                 let w = (ui.available_width() - 4.0).max(40.0);
+                let list = self.folder_presets();
                 egui::ComboBox::from_id_salt("preset").selected_text(label).width(w).show_ui(ui, |ui| {
-                    if self.presets.is_empty() {
+                    if list.is_empty() {
                         ui.label(egui::RichText::new("No presets saved yet").weak());
                     }
-                    for (i, p) in self.presets.iter().enumerate() {
+                    for (i, p) in list.iter().map(|&i| (i, &self.presets[i])) {
                         if ui.selectable_label(Some(i) == self.preset_idx, store::preset_label(p)).clicked() {
                             pick = Some(i);
                         }
@@ -1015,6 +1138,10 @@ impl PhthoraApp {
                 if ui.add_enabled(self.preset_idx.is_some(), egui::Button::new("Delete").small()).clicked() {
                     self.delete_preset();
                 }
+                if ui.add_enabled(self.preset_idx.is_some(), egui::Button::new("↺").small()).on_hover_text("Revert: load the saved preset again").clicked()
+                    && let Some(i) = self.preset_idx {
+                        self.load_preset(i);
+                    }
                 if ui.add_enabled(self.preset_idx.is_some(), egui::Button::new("Update").small()).on_hover_text("Ctrl+U").clicked() {
                     self.update_preset();
                 }
@@ -1065,6 +1192,7 @@ impl PhthoraApp {
                 continue;
             }
             let group_end = gid.and_then(|g| self.chain.group_range(g)).map(|r| r.end);
+            let locked = self.chain.is_locked(&self.chain.effects[i]);
             let e = &mut self.chain.effects[i];
             let uid = e.uid;
             let indent = if gid.is_some() { 14 } else { 0 };
@@ -1119,7 +1247,7 @@ impl PhthoraApp {
                             }
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                            if ui.add_enabled(!locked, egui::Button::new("✕").small()).on_hover_text("Remove").on_disabled_hover_text("Locked").clicked() {
                                 remove = Some(uid);
                             }
                             if ui.small_button("⧉").on_hover_text("Duplicate").clicked() {
@@ -1241,7 +1369,7 @@ impl PhthoraApp {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Remove the group and its effects").clicked() {
+                        if ui.add_enabled(!g.locked, egui::Button::new("✕").small()).on_hover_text("Remove the group and its effects").on_disabled_hover_text("Locked").clicked() {
                             op = Some(GroupOp::Remove(gid));
                         }
                         if ui.small_button("⧉").on_hover_text("Duplicate the group").clicked() {
@@ -1402,6 +1530,20 @@ impl PhthoraApp {
                             self.use_bpm = true;
                         }
                     }
+                    // one lamp per beat of the bar
+                    if self.use_bpm {
+                        let beat = (self.last_ft.export_time * self.bpm / 60.0).floor() as i64;
+                        for k in 0..4 {
+                            let on = beat.rem_euclid(4) == k;
+                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+                            let col = match (on, k) {
+                                (true, 0) => Color32::from_rgb(240, 120, 90),
+                                (true, _) => Color32::from_rgb(120, 220, 160),
+                                _ => Color32::from_gray(60),
+                            };
+                            ui.painter().circle_filled(rect.center(), 4.0, col);
+                        }
+                    }
                 });
                 ui.end_row();
                 ui.label("Background");
@@ -1511,7 +1653,7 @@ impl PhthoraApp {
                 ui.end_row();
                 ui.label("Presets");
                 if ui.button("Open preset folder").clicked() {
-                    let _ = std::process::Command::new("xdg-open").arg(store::preset_dir()).spawn();
+                    open_path(&store::preset_dir());
                 }
                 ui.end_row();
             });
@@ -1624,6 +1766,115 @@ impl PhthoraApp {
         if !open && self.export.running.is_none() {
             self.export.open = false;
         }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let Some(d) = &mut self.dialog else { return };
+        let mut close = false;
+        let mut run: Option<Confirm> = None;
+        let mut folder: Option<String> = None;
+        let resp = egui::Modal::new(egui::Id::unique("dialog")).show(ctx, |ui| {
+            ui.set_max_width(440.0);
+            match d {
+                Dialog::Error { title, text } => {
+                    ui.heading(title.as_str());
+                    ui.add_space(6.0);
+                    ui.label(text.as_str());
+                    ui.add_space(10.0);
+                    if ui.button("OK").clicked() {
+                        close = true;
+                    }
+                }
+                Dialog::Confirm { text, yes, action } => {
+                    ui.label(text.as_str());
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(*yes).clicked() {
+                            run = Some(action.clone());
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+                Dialog::NewFolder(name) => {
+                    ui.label("New preset folder");
+                    let r = ui.add(egui::TextEdit::singleline(name).hint_text("name"));
+                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if !enter {
+                        r.request_focus();
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Create").clicked() || enter {
+                            folder = Some(name.clone());
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                }
+            }
+        });
+        if resp.should_close() {
+            close = true;
+        }
+        if close || run.is_some() || folder.is_some() {
+            self.dialog = None;
+        }
+        match run {
+            Some(Confirm::DeletePreset(p)) => self.remove_preset_file(&p),
+            Some(Confirm::OverwritePreset(name)) => self.write_preset(&name),
+            Some(Confirm::Quit) => {
+                self.quit_ok = true;
+                if let Some((_, p, _)) = &self.export.running {
+                    p.cancel.store(true, Ordering::Relaxed);
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            None => {}
+        }
+        if let Some(name) = folder {
+            let name = store::sanitize_name(&name);
+            if name.is_empty() {
+                self.notify("Folder name: letters, digits, space, - and _ only");
+            } else if let Err(e) = std::fs::create_dir_all(store::preset_dir().join(&name)) {
+                self.error("Cannot create the folder", e.to_string());
+            } else {
+                self.preset_folder = Some(name);
+            }
+        }
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_about;
+        egui::Window::new("About").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            ui.heading("phthora");
+            ui.label(format!("Version {} · built {}", env!("CARGO_PKG_VERSION"), env!("PHTHORA_BUILD_DATE")));
+            ui.add_space(6.0);
+            ui.label("Real-time GPU effect mixer for images, video and GIFs.");
+            ui.label("MIT OR Apache-2.0. Third-party licenses are listed in THIRD_PARTY_LICENSES.");
+            ui.add_space(6.0);
+            let gpu = self.render_state.adapter.get_info();
+            ui.label(egui::RichText::new(format!("GPU: {} ({:?})", gpu.name, gpu.backend)).small().weak());
+            if ui.link("Open the log folder").clicked() {
+                open_path(&store::log_dir());
+            }
+        });
+        self.show_about = open;
+    }
+
+    /// Every effect, switched off and collapsed (locked effects stay).
+    fn load_defaults(&mut self) {
+        let effects = registry::available()
+            .map(|d| {
+                let mut e = phthora_core::EffectInstance::new(d);
+                e.enabled = false;
+                e.expanded = false;
+                e
+            })
+            .collect();
+        self.chain.replace(Chain { effects, groups: Vec::new() }, true);
     }
 
     fn handle_actions(&mut self, actions: Vec<Action>) {
@@ -1745,6 +1996,12 @@ impl eframe::App for PhthoraApp {
             self.preview(ui);
         });
         self.handle_actions(actions);
+        if ctx.input(|i| i.viewport().close_requested()) && self.export.running.is_some() && !self.quit_ok {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.dialog = Some(Dialog::Confirm { text: "An export is running. Quit and cancel it?".into(), yes: "Quit", action: Confirm::Quit });
+        }
+        self.dialogs(&ctx);
+        self.about_window(&ctx);
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let input_audio = self.input_audio_usable();
@@ -1780,5 +2037,13 @@ impl eframe::App for PhthoraApp {
             self.settings.flip_x = self.engine.flip_x;
         }
         self.settings.save();
+    }
+}
+
+/// Show a folder or file in the desktop's file manager.
+fn open_path(p: &Path) {
+    let _ = std::fs::create_dir_all(p);
+    if let Err(e) = std::process::Command::new("xdg-open").arg(p).spawn() {
+        tracing::warn!("xdg-open {}: {e}", p.display());
     }
 }

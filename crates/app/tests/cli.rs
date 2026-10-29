@@ -194,3 +194,12 @@ fn help_lists_the_options() {
         assert!(String::from_utf8_lossy(&out.stdout).contains("--audio FILE|none"), "{args:?}");
     }
 }
+
+#[test]
+fn version() {
+    for flag in ["--version", "-V"] {
+        let out = run(bin().arg(flag));
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("phthora {}", env!("CARGO_PKG_VERSION")));
+    }
+}

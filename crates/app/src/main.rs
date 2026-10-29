@@ -243,6 +243,10 @@ fn main() {
         println!("{USAGE}");
         return;
     }
+    if args.first().map(|a| a == "-V" || a == "--version").unwrap_or(false) {
+        println!("phthora {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.first().map(|a| a == "render").unwrap_or(false) {
         if let Err(e) = cli_render(&args[1..]) {
             eprintln!("error: {e}");
@@ -250,6 +254,8 @@ fn main() {
         }
         return;
     }
+    let _log = init_log();
+    tracing::info!("phthora {} starting", env!("CARGO_PKG_VERSION"));
     let initial = args.first().map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_title("phthora").with_inner_size([1440.0, 860.0]).with_app_id("phthora").with_drag_and_drop(true),
@@ -257,7 +263,28 @@ fn main() {
         ..Default::default()
     };
     if let Err(e) = eframe::run_native("phthora", options, Box::new(move |cc| Ok(Box::new(app::PhthoraApp::new(cc, initial))))) {
+        tracing::error!("cannot start: {e}");
         eprintln!("error: {e}");
+        // most often the GPU: say so in a window, the terminal may not be visible
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("phthora cannot start")
+            .set_description(format!("{e}\n\nphthora needs a GPU with Vulkan, Metal or DirectX 12 support. Details are in {}.", store::log_dir().display()))
+            .show();
         std::process::exit(1);
     }
+}
+
+/// Log to `data_dir/logs/phthora.YYYY-MM-DD.log`, one file per day, the last five kept.
+fn init_log() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("phthora")
+        .filename_suffix("log")
+        .max_log_files(5)
+        .build(store::log_dir())
+        .ok()?;
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    tracing_subscriber::fmt().with_writer(writer).with_ansi(false).with_target(false).init();
+    Some(guard)
 }

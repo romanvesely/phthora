@@ -22,6 +22,10 @@ pub fn data_dir() -> PathBuf {
     xdg("XDG_DATA_HOME", ".local/share").join("phthora")
 }
 
+pub fn log_dir() -> PathBuf {
+    data_dir().join("logs")
+}
+
 pub fn preset_dir() -> PathBuf {
     let d = data_dir().join("presets");
     let _ = std::fs::create_dir_all(&d);
@@ -134,8 +138,28 @@ pub fn sanitize_name(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' ')).take(24).collect::<String>().trim().to_string()
 }
 
-pub fn preset_path(name: &str) -> PathBuf {
-    preset_dir().join(format!("{name}{PRESET_EXT}"))
+/// Path of a preset in a subfolder (or the preset folder itself).
+pub fn preset_path(folder: Option<&str>, name: &str) -> PathBuf {
+    let dir = match folder {
+        Some(f) => preset_dir().join(f),
+        None => preset_dir(),
+    };
+    dir.join(format!("{name}{PRESET_EXT}"))
+}
+
+/// Subfolder a preset is in (None: directly in the preset folder).
+pub fn preset_folder(p: &Path) -> Option<String> {
+    let par = p.parent()?;
+    (par != preset_dir()).then(|| par.file_name().map(|n| n.to_string_lossy().to_string())).flatten()
+}
+
+/// Subfolders of the preset folder, sorted by name.
+pub fn preset_folders() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(preset_dir())
+        .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    v.sort_by_key(|n| n.to_lowercase());
+    v
 }
 
 #[cfg(test)]
