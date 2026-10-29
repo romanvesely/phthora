@@ -170,6 +170,8 @@ pub struct PhthoraApp {
     /// state shared with the preview window, which runs its own passes (see `popout_window`)
     popout_state: Arc<Mutex<Popout>>,
     model_download: Option<std::thread::JoinHandle<Result<PathBuf, phthora_seg::Error>>>,
+    /// font names in the user's fonts folder (rescanned with the presets)
+    user_fonts: Vec<String>,
     dialog: Option<Dialog>,
     /// the user confirmed quitting while an export runs
     quit_ok: bool,
@@ -249,6 +251,7 @@ impl PhthoraApp {
             popout_on_top: false,
             popout_state: Arc::default(),
             model_download: None,
+            user_fonts: phthora_gpu::assets::list_fonts(&store::fonts_dir()),
             dialog: None,
             quit_ok: false,
             preset_folder: None,
@@ -508,6 +511,7 @@ impl PhthoraApp {
     // ------------------------------------------------------------ presets
 
     fn rescan_presets(&mut self) {
+        self.user_fonts = phthora_gpu::assets::list_fonts(&store::fonts_dir());
         let cur = self.preset_idx.and_then(|i| self.presets.get(i).cloned());
         self.presets = store::list_presets();
         self.preset_idx = cur.and_then(|c| self.presets.iter().position(|p| *p == c));
@@ -1102,6 +1106,14 @@ impl PhthoraApp {
                 if ui.button("Open output folder").clicked() {
                     open_path(&self.settings.export_dir());
                 }
+                if ui.button("Open fonts folder").on_hover_text("TTF and OTF files here appear in Caption's font list").clicked() {
+                    let dir = store::fonts_dir();
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        self.error("Cannot create the fonts folder", e.to_string());
+                    } else {
+                        open_path(&dir);
+                    }
+                }
                 if ui.button("Open log folder").clicked() {
                     open_path(&store::log_dir());
                 }
@@ -1397,7 +1409,7 @@ impl PhthoraApp {
                     });
                     if e.expanded {
                         let learning = self.learning.as_ref().map(|l| (l.uid, l.key.as_str()));
-                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink, audio_env: audio_env.as_deref().map(|v| v.as_slice()), problem: self.engine.problem(uid) };
+                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink, audio_env: audio_env.as_deref().map(|v| v.as_slice()), problem: self.engine.problem(uid), user_fonts: &self.user_fonts };
                         params_ui::effect_params(ui, e, &mut cx);
                     }
                 })

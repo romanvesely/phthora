@@ -299,3 +299,33 @@ fn version() {
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("phthora {}", env!("CARGO_PKG_VERSION")));
     }
 }
+
+#[test]
+fn caption_uses_fonts_from_the_fonts_folder() {
+    if !have("ffmpeg") {
+        eprintln!("skipped: ffmpeg not found");
+        return;
+    }
+    let d = tmp_dir("fonts");
+    let data = d.join("data");
+    std::fs::create_dir_all(data.join("phthora/fonts")).unwrap();
+    let mono = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/roboto-mono-regular.ttf");
+    std::fs::copy(&mono, data.join("phthora/fonts/Custom.ttf")).unwrap();
+    let render = |font: &str| {
+        let preset = d.join(format!("{font}.phthora.json"));
+        let json = format!(r#"{{"version":2,"effects":[{{"effect":"caption","enabled":true,"locked":false,"expanded":true,"seed":0.5,"params":{{"text":"Hello 123","font":"{font}","size":0.5}}}}]}}"#);
+        std::fs::write(&preset, json).unwrap();
+        let out = d.join(format!("{font}.png"));
+        let res = run(bin().env("XDG_DATA_HOME", &data).args(["render", "--size", "160x90", "--preset"]).arg(&preset).arg("--out").arg(&out));
+        (std::fs::read(&out).unwrap(), String::from_utf8_lossy(&res.stderr).to_string())
+    };
+    let (custom, log) = render("Custom");
+    assert!(!log.contains("ignored param"), "the font name is accepted: {log}");
+    let (mono, _) = render("Mono");
+    let (sans, _) = render("Sans");
+    assert_eq!(custom, mono, "Custom.ttf is the mono font");
+    assert_ne!(custom, sans);
+    // a font that is gone falls back to the default
+    let (gone, _) = render("Gone");
+    assert_eq!(gone, sans);
+}

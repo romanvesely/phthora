@@ -3266,7 +3266,8 @@
      "VCR",
      "Pixel"
     ],
-    "default": "Sans"
+    "default": "Sans",
+    "user_fonts": true
    },
    {
     "key": "align",

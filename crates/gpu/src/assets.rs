@@ -141,6 +141,8 @@ impl VideoTexture {
 #[derive(Default)]
 pub struct Assets {
     pub dir: Option<PathBuf>,
+    /// the user's own fonts (TTF, OTF), offered by name (file name without extension)
+    pub font_dir: Option<PathBuf>,
     pub video_opener: Option<VideoOpener>,
     pub image_loader: Option<ImageLoader>,
     luts: HashMap<String, Rc<Target>>,
@@ -226,8 +228,8 @@ impl Assets {
         None
     }
 
-    /// Font chain for a named font (`Sans`, `Serif`, `Mono`, `Impact`, `VCR`, `Pixel`).
-    /// Later entries are fallbacks for missing glyphs.
+    /// Font chain for a named font (`Sans`, `Serif`, `Mono`, `Impact`, `VCR`, `Pixel`, or a
+    /// font file in `font_dir`). Later entries are fallbacks for missing glyphs.
     pub fn font(&mut self, name: &str) -> Vec<FontData> {
         if let Some(f) = self.fonts.get(name) {
             return f.clone();
@@ -241,7 +243,7 @@ impl Assets {
             "Impact" => self
                 .system_font(&["Impact", "Anton", "Oswald", "League Gothic", "Bebas Neue"], false)
                 .or_else(|| self.system_font(&["Liberation Sans Narrow", "DejaVu Sans Condensed", "DejaVu Sans"], true)),
-            _ => None,
+            _ => self.font_dir.as_deref().and_then(|d| user_font_file(d, name)).and_then(|p| std::fs::read(p).ok()).map(|data| FontData { data: std::sync::Arc::new(data), index: 0 }),
         };
         let mut chain: Vec<FontData> = primary.into_iter().collect();
         chain.push(sans);
@@ -251,4 +253,25 @@ impl Assets {
         self.fonts.insert(name.to_string(), chain.clone());
         chain
     }
+}
+
+const FONT_EXTENSIONS: [&str; 3] = ["ttf", "otf", "ttc"];
+
+/// Names of the fonts in a folder (file names without extension), sorted.
+pub fn list_fonts(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| FONT_EXTENSIONS.iter().any(|f| x.eq_ignore_ascii_case(f))))
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn user_font_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    FONT_EXTENSIONS.iter().flat_map(|x| [x.to_string(), x.to_uppercase()]).map(|x| dir.join(format!("{name}.{x}"))).find(|p| p.is_file())
 }

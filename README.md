@@ -134,7 +134,9 @@ as a preset.
 
 Double-click a slider to reset it, double-click an effect or group name to rename it.
 The mouse wheel over a slider moves it one step. The ☰ menu loads all effects, disables
-or removes them, opens the preset, output and log folders and shows the version.
+or removes them, opens the preset, output, fonts and log folders and shows the version.
+Keyframe curves: click adds a point, drag moves it (Shift snaps), double or right click
+deletes it; the background shows the loudness of the audio track.
 
 ## Command line
 
@@ -194,6 +196,7 @@ phthora render clip.mp4 --preset mine.phthora.json --background transparent --ou
 | Preset folders | subfolders of the presets folder |
 | Webcam recordings | `$XDG_DATA_HOME/phthora/recordings` |
 | Remove Background model | `$XDG_DATA_HOME/phthora/models` |
+| Your own fonts for Caption (TTF, OTF) | `$XDG_DATA_HOME/phthora/fonts` |
 | Log files | `$XDG_DATA_HOME/phthora/logs` (one per day, the last five are kept) |
 | Settings | `$XDG_CONFIG_HOME/phthora/settings.json` |
 | Assets | `assets/` next to the binary, or `PHTHORA_ASSETS` |

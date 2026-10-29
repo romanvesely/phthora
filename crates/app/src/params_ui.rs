@@ -33,6 +33,8 @@ pub struct ParamCtx<'a> {
     pub audio_env: Option<&'a [f32]>,
     /// why the effect cannot do its job (a file that cannot be read)
     pub problem: Option<String>,
+    /// fonts in the user's fonts folder
+    pub user_fonts: &'a [String],
 }
 
 const LABEL_W: f32 = 92.0;
@@ -181,12 +183,16 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                     }
                 });
             }
-            ParamKind::Combo { values, .. } => {
+            ParamKind::Combo { values, user_fonts, .. } => {
                 let cur = e.get(&key).map(|v| v.as_str().to_string()).unwrap_or_default();
+                let extra: &[String] = if *user_fonts { cx.user_fonts } else { &[] };
                 ui.horizontal(|ui| {
                     label(ui, &p.label);
-                    egui::ComboBox::from_id_salt((uid, &key)).selected_text(&cur).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
-                        for v in values {
+                    egui::ComboBox::from_id_salt((uid, &key)).selected_text(&cur).width(ui.available_width() - 8.0).height(400.0).show_ui(ui, |ui| {
+                        for (i, v) in values.iter().chain(extra).enumerate() {
+                            if i == values.len() {
+                                ui.separator();
+                            }
                             if ui.selectable_label(*v == cur, v).clicked() && *v != cur {
                                 e.set(&key, Value::Text(v.clone()));
                                 changed = true;

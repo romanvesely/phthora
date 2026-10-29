@@ -48,6 +48,9 @@ pub enum ParamKind {
         default: String,
         #[serde(default)]
         no_random: bool,
+        /// also offers the fonts in the user's fonts folder, so any name is accepted
+        #[serde(default)]
+        user_fonts: bool,
     },
     Color {
         default: String,
@@ -168,9 +171,9 @@ impl Value {
                 _ => v.as_f64()? as f32,
             }),
             ParamKind::Bool { .. } => Value::Bool(v.as_bool()?),
-            ParamKind::Combo { values, .. } => {
+            ParamKind::Combo { values, user_fonts, .. } => {
                 let s = v.as_str()?;
-                if !values.iter().any(|x| x == s) {
+                if !values.iter().any(|x| x == s) && !(*user_fonts && !s.is_empty()) {
                     return None;
                 }
                 Value::Text(s.to_string())

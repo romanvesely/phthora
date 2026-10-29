@@ -26,6 +26,11 @@ pub fn log_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+/// The user's own fonts for Caption.
+pub fn fonts_dir() -> PathBuf {
+    data_dir().join("fonts")
+}
+
 pub fn preset_dir() -> PathBuf {
     let d = data_dir().join("presets");
     let _ = std::fs::create_dir_all(&d);

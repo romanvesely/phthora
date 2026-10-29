@@ -57,6 +57,7 @@ impl VideoSource for ClipSource {
 
 /// Let the engine decode overlay clips and user images through ffmpeg.
 pub fn install(assets: &mut Assets, realtime: bool) {
+    assets.font_dir = Some(crate::store::fonts_dir());
     if !phthora_media::ffmpeg_available() {
         return;
     }
