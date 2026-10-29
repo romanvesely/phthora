@@ -41,11 +41,28 @@ pub struct Settings {
     /// encode MP4 on the GPU (VAAPI) when available
     pub hw_encode: bool,
     pub audio: phthora_audio::AudioSettings,
+    /// camera device for webcam input
+    pub camera: Option<PathBuf>,
+    /// mirror the webcam (like a mirror, the default)
+    pub flip_webcam: bool,
+    /// send the preview to this v4l2loopback device
+    pub virtual_cam: Option<PathBuf>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { output_dir: None, input_dir: None, background: [0.0, 0.0, 0.0, 1.0], quality: "high".into(), flip_x: false, hw_encode: true, audio: Default::default() }
+        Self {
+            output_dir: None,
+            input_dir: None,
+            background: [0.0, 0.0, 0.0, 1.0],
+            quality: "high".into(),
+            flip_x: false,
+            hw_encode: true,
+            audio: Default::default(),
+            camera: None,
+            flip_webcam: true,
+            virtual_cam: None,
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! Frame pipeline shared by the preview and the export: which input frame belongs to
 //! output frame n, and when the preview has to render again.
 
-use phthora_core::{ClipTiming, OutputMode, Playback, ResolvedEffect, TimingSettings};
+use phthora_core::{ClipTiming, FrameTime, OutputMode, Playback, ResolvedEffect, TimingSettings};
 use phthora_gpu::Engine;
 use phthora_media::{ClipReader, Frame, MediaInfo};
 use std::path::Path;
@@ -116,6 +116,18 @@ impl Preview {
                 source = uploaded;
             }
         }
+        self.finish(engine, n, source, &ft, effects)
+    }
+
+    /// Render live frame `seq` (camera) if needed; `ft` comes from the live clock.
+    pub fn step_live(&mut self, engine: &mut Engine, seq: u64, frame: &Frame, ft: &FrameTime, effects: Vec<ResolvedEffect>) -> Step {
+        if self.last.as_ref().and_then(|l| l.source) != Some(seq) {
+            engine.set_source_rgba(frame.width, frame.height, &frame.data);
+        }
+        self.finish(engine, seq, Some(seq), ft, effects)
+    }
+
+    fn finish(&mut self, engine: &mut Engine, n: u64, source: Option<u64>, ft: &FrameTime, effects: Vec<ResolvedEffect>) -> Step {
         let look = (engine.background.map(f32::to_bits), engine.flip_x, engine.size());
         let spectrum = if effects.iter().any(|e| e.desc.id == "audio_visualizer") { engine.audio_spectrum.iter().map(|v| v.to_bits()).collect() } else { Vec::new() };
         let mut paint: Vec<(u64, u64)> = engine.paint.iter().map(|(u, c)| (*u, c.version)).collect();
@@ -131,7 +143,7 @@ impl Preview {
             (OutputMode::Video, Some(l)) if n < l.frame => engine.reset_history(),
             _ => {}
         }
-        engine.render(&next.effects, &ft);
+        engine.render(&next.effects, ft);
         self.last = Some(next);
         Step::Rendered
     }

@@ -4,6 +4,8 @@ use crate::audio_ui::{AudioState, Src};
 use phthora_audio::{MidiIn, MidiValues};
 use phthora_gpu::paint::{self, PaintCanvas, PaintKind};
 use phthora_core::orbit::{self, Orbit};
+use phthora_gpu::Readback;
+use phthora_media::{LiveSource, Record, VideoDevice, VirtualCam};
 use crate::params_ui::{self, Action, ParamCtx};
 use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
@@ -29,7 +31,14 @@ enum Source {
     None,
     Still,
     Video(InputVideo),
+    /// webcam; the effect clock runs in 4 s loops on real time, like the reference
+    Live(LiveSource),
 }
+
+/// Loop length of the live clock (webcam), seconds.
+const LIVE_LOOP: f64 = 4.0;
+/// Size the webcam is shown at.
+const LIVE_SIZE: (u32, u32) = (1280, 720);
 
 /// A running export: worker thread, progress, start time.
 type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
@@ -76,6 +85,14 @@ pub struct PhthoraApp {
     /// drawing effect chosen to receive mouse strokes (else the last one in the stack)
     draw_target: Option<u64>,
     stroke: Option<Stroke>,
+    /// clock of the live input (webcam)
+    live_clock: Instant,
+    /// recording started at (webcam)
+    rec_started: Option<Instant>,
+    /// video devices, refreshed when the settings open
+    devices: Vec<VideoDevice>,
+    /// preview frames to a virtual camera, with the readback that feeds it
+    vcam: Option<(VirtualCam, Readback)>,
     playback: Playback,
     /// VAAPI H.264 works here (checked in the background at start)
     vaapi: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -137,6 +154,10 @@ impl PhthoraApp {
             learning: None,
             draw_target: None,
             stroke: None,
+            live_clock: Instant::now(),
+            rec_started: None,
+            devices: Vec::new(),
+            vcam: None,
             playback: Playback::default(),
             vaapi: Default::default(),
             timing: TimingSettings::default(),
@@ -377,6 +398,10 @@ impl PhthoraApp {
         self.out_size = (w, h);
         self.engine.set_size(w, h);
         self.reopen_video();
+        if let Source::Live(cam) = &self.source
+            && cam.size() != (w, h) && self.rec_started.is_none() {
+                self.start_webcam(None);
+            }
     }
 
     /// Restart the input video with the current size and playback settings.
@@ -583,6 +608,10 @@ impl PhthoraApp {
         self.last_tick = Some(now);
         let alive: HashSet<u64> = self.chain.effects.iter().map(|e| e.uid).collect();
         self.engine.retain(|u| alive.contains(&u));
+        if matches!(self.source, Source::Live(_)) {
+            self.tick_live();
+            return;
+        }
         let timing = self.timing_now();
         let n = self.frame_index();
         let ft = timing.at_frame(n);
@@ -598,9 +627,165 @@ impl PhthoraApp {
             _ => None,
         };
         match self.preview.step(&mut self.engine, video, n, &timing, resolved) {
-            Step::Rendered => self.update_display(),
+            Step::Rendered => self.on_rendered(),
             Step::Waiting => self.waiting = true,
             Step::Unchanged => {}
+        }
+    }
+
+    /// Webcam frame: effects run on the live clock (4 s loops of real time).
+    fn tick_live(&mut self) {
+        let Source::Live(cam) = &self.source else { return };
+        if let Some(e) = cam.error() {
+            self.stop_webcam();
+            self.notify(format!("Webcam stopped: {}", e.lines().last().unwrap_or(&e)));
+            return;
+        }
+        let Some((seq, frame)) = cam.latest() else {
+            self.waiting = true;
+            return;
+        };
+        let timing = TimingSettings { mode: OutputMode::Video, duration: LIVE_LOOP, fps: 30.0, bpm: self.use_bpm.then_some(self.bpm) };
+        let mut ft = timing.at_seconds(self.live_clock.elapsed().as_secs_f64());
+        ft.frame = seq;
+        self.last_ft = ft;
+        let mut live = self.audio.inputs(seq, timing.fps);
+        // start and end of modulators mean nothing without an output length
+        live.live = true;
+        self.engine.audio_spectrum.clone_from(&self.audio.spectrum);
+        self.poll_midi();
+        self.sync_paint();
+        let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &self.midi_values);
+        self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
+        if self.preview.step_live(&mut self.engine, seq, &frame, &ft, resolved) == Step::Rendered {
+            self.on_rendered();
+        }
+        // poll for the next camera frame
+        self.waiting = true;
+    }
+
+    fn on_rendered(&mut self) {
+        self.update_display();
+        self.feed_virtual_cam();
+    }
+
+    /// Send the newest preview frame to the virtual camera (two frames behind: readback ring).
+    fn feed_virtual_cam(&mut self) {
+        let size = self.engine.size();
+        if self.vcam.as_ref().is_some_and(|(v, _)| v.size() != size || v.error().is_some()) {
+            if let Some(e) = self.vcam.as_ref().and_then(|(v, _)| v.error()) {
+                self.notify(format!("Virtual camera: {}", e.lines().last().unwrap_or(&e)));
+                self.settings.virtual_cam = None;
+            }
+            self.vcam = None;
+        }
+        if self.vcam.is_none()
+            && let Some(dev) = self.settings.virtual_cam.clone() {
+                match VirtualCam::open(&dev, size.0, size.1, 30.0) {
+                    Ok(v) => self.vcam = Some((v, Readback::new(&self.engine.ctx, &self.engine.lib, size.0, size.1))),
+                    Err(e) => {
+                        self.notify(format!("Virtual camera: {e}"));
+                        self.settings.virtual_cam = None;
+                    }
+                }
+            }
+        if let Some((v, rb)) = &mut self.vcam
+            && let Some(px) = rb.push(self.engine.output(), self.engine.blank()) {
+                v.push(px);
+            }
+    }
+
+    /// Camera devices first, then loopback devices that currently carry video.
+    fn cameras(&self) -> Vec<VideoDevice> {
+        let mut v: Vec<VideoDevice> = self.devices.iter().filter(|d| d.capture && Some(&d.path) != self.settings.virtual_cam.as_ref()).cloned().collect();
+        v.sort_by_key(|d| d.loopback);
+        v
+    }
+
+    fn start_webcam(&mut self, record: Option<Record>) {
+        if self.devices.is_empty() {
+            self.devices = phthora_media::list_devices();
+        }
+        let cams = self.cameras();
+        let dev = match &self.settings.camera {
+            Some(p) if cams.iter().any(|d| &d.path == p) => p.clone(),
+            _ => match cams.first() {
+                Some(d) => d.path.clone(),
+                None => {
+                    self.notify("No webcam found");
+                    return;
+                }
+            },
+        };
+        // the device is busy while the old capture runs
+        let was_live = matches!(self.source, Source::Live(_));
+        if was_live {
+            self.source = Source::None;
+        }
+        if !was_live && self.out_size != LIVE_SIZE {
+            self.set_size(LIVE_SIZE.0, LIVE_SIZE.1);
+        }
+        let (w, h) = self.out_size;
+        match LiveSource::open(&dev, w, h, record.clone()) {
+            Ok(cam) => {
+                self.source = Source::Live(cam);
+                self.settings.camera = Some(dev);
+                self.input_path = None;
+                self.input_info = None;
+                self.timing.mode = OutputMode::Video;
+                self.engine.flip_x = self.settings.flip_webcam;
+                self.engine.reset_history();
+                self.preview.invalidate();
+                self.rec_started = record.is_some().then(Instant::now);
+                if record.is_none() {
+                    self.notify("Webcam on");
+                }
+            }
+            Err(e) => self.notify(format!("Cannot start the webcam: {e}")),
+        }
+    }
+
+    fn stop_webcam(&mut self) {
+        if let Source::Live(cam) = std::mem::replace(&mut self.source, Source::None) {
+            self.settings.flip_webcam = self.engine.flip_x;
+            self.engine.flip_x = self.settings.flip_x;
+            self.rec_started = None;
+            drop(cam);
+            self.preview.invalidate();
+        }
+    }
+
+    /// Start or finish a webcam recording. A finished recording becomes the input and the
+    /// export opens, so the effects can be rendered onto it.
+    fn toggle_recording(&mut self) {
+        let Source::Live(_) = self.source else { return };
+        if self.rec_started.is_none() {
+            let dir = store::data_dir().join("recordings");
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join(phthora_media::default_export_name("webcam", "mkv"));
+            // the microphone is recorded when it is the audio source
+            let audio = self.audio.src == Src::Mic;
+            self.start_webcam(Some(Record { path, audio }));
+            self.notify(if audio { "Recording webcam and microphone" } else { "Recording webcam" });
+            return;
+        }
+        let Source::Live(cam) = std::mem::replace(&mut self.source, Source::None) else { return };
+        self.settings.flip_webcam = self.engine.flip_x;
+        self.rec_started = None;
+        match cam.stop() {
+            Some(path) => {
+                self.load_input(&path);
+                // the recording shows the camera as it was seen
+                self.engine.flip_x = self.settings.flip_webcam;
+                if self.audio.src == Src::Mic {
+                    self.audio.src = Src::Input;
+                }
+                self.export.open = true;
+            }
+            None => {
+                self.engine.flip_x = self.settings.flip_x;
+                self.notify("The recording could not be written");
+            }
         }
     }
 
@@ -641,6 +826,9 @@ impl PhthoraApp {
         }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::O))) {
             self.pick_input();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::W))) {
+            if matches!(self.source, Source::Live(_)) { self.stop_webcam() } else { self.start_webcam(None) }
         }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::S))) {
             self.export.open = true;
@@ -705,10 +893,26 @@ impl PhthoraApp {
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 self.pick_input();
             }
+            let live = matches!(self.source, Source::Live(_));
+            if ui.add(egui::Button::new("Webcam").selected(live)).on_hover_text("Ctrl+W").clicked() {
+                if live { self.stop_webcam() } else { self.start_webcam(None) }
+            }
+            if live {
+                let txt = match self.rec_started {
+                    Some(t) => egui::RichText::new(format!("■ {:.0} s", t.elapsed().as_secs_f64().floor())).color(Color32::from_rgb(240, 90, 90)),
+                    None => egui::RichText::new("● Rec").color(Color32::from_rgb(240, 90, 90)),
+                };
+                if ui.button(txt).on_hover_text("Record the webcam, then export it with the effects").clicked() {
+                    self.toggle_recording();
+                }
+            }
             ui.separator();
             let mut mode = self.timing.mode;
-            ui.selectable_value(&mut mode, OutputMode::Image, "Image");
-            ui.selectable_value(&mut mode, OutputMode::Video, "Video");
+            // the webcam always runs as video
+            ui.add_enabled_ui(!live, |ui| {
+                ui.selectable_value(&mut mode, OutputMode::Image, "Image");
+                ui.selectable_value(&mut mode, OutputMode::Video, "Video");
+            });
             if mode != self.timing.mode {
                 self.timing.mode = mode;
                 self.export.format = if mode == OutputMode::Image { Format::Png } else if self.export.format == Format::Png { Format::Mp4 } else { self.export.format };
@@ -716,7 +920,7 @@ impl PhthoraApp {
                 self.preview.invalidate();
             }
             ui.separator();
-            if self.timing.mode == OutputMode::Video {
+            if self.timing.mode == OutputMode::Video && !matches!(self.source, Source::Live(_)) {
                 if ui.button(if self.playing { "⏸" } else { "▶" }).on_hover_text("Space").clicked() {
                     self.playing = !self.playing;
                 }
@@ -991,7 +1195,7 @@ impl PhthoraApp {
             // engine output rows are bottom-up
             painter.image(*id, rect, Rect::from_min_max(Pos2::new(0.0, 1.0), Pos2::new(1.0, 0.0)), Color32::WHITE);
         }
-        if self.input_path.is_none() {
+        if self.input_path.is_none() && !matches!(self.source, Source::Live(_)) {
             painter.text(avail.center(), egui::Align2::CENTER_CENTER, "Drop an image or video here  ·  Ctrl+O", egui::FontId::proportional(18.0), Color32::from_gray(200));
         }
     }
@@ -1099,6 +1303,57 @@ impl PhthoraApp {
                         self.preview.invalidate();
                     }
                 }
+                ui.label("Webcam");
+                ui.horizontal(|ui| {
+                    let cams = self.cameras();
+                    let cur = self.settings.camera.clone().filter(|p| cams.iter().any(|d| &d.path == p)).or_else(|| cams.first().map(|d| d.path.clone()));
+                    let label = |p: &Option<PathBuf>| p.as_ref().and_then(|p| cams.iter().find(|d| &d.path == p)).map(|d| d.name.clone()).unwrap_or_else(|| "none found".into());
+                    let mut pick = cur.clone();
+                    egui::ComboBox::from_id_salt("camera").selected_text(label(&cur)).width(200.0).show_ui(ui, |ui| {
+                        for d in &cams {
+                            ui.selectable_value(&mut pick, Some(d.path.clone()), format!("{} ({})", d.name, d.path.display()));
+                        }
+                    });
+                    if pick != cur {
+                        self.settings.camera = pick;
+                        if matches!(self.source, Source::Live(_)) {
+                            self.start_webcam(None);
+                        }
+                    }
+                    if ui.small_button("↻").on_hover_text("Look for devices again").clicked() {
+                        self.devices = phthora_media::list_devices();
+                    }
+                });
+                ui.end_row();
+                ui.label("Virtual camera");
+                ui.horizontal(|ui| {
+                    let outs: Vec<VideoDevice> = self.devices.iter().filter(|d| d.loopback).cloned().collect();
+                    let mut on = self.settings.virtual_cam.is_some();
+                    let changed = ui
+                        .add_enabled(!outs.is_empty(), egui::Checkbox::new(&mut on, "send the preview"))
+                        .on_disabled_hover_text("Needs a v4l2loopback device (modprobe v4l2loopback)")
+                        .changed();
+                    if changed {
+                        self.settings.virtual_cam = on.then(|| outs.iter().find(|d| Some(&d.path) != self.settings.camera.as_ref()).or(outs.first()).map(|d| d.path.clone())).flatten();
+                    }
+                    if let Some(cur) = self.settings.virtual_cam.clone() {
+                        let mut pick = cur.clone();
+                        egui::ComboBox::from_id_salt("vcam").selected_text(cur.display().to_string()).show_ui(ui, |ui| {
+                            for d in &outs {
+                                ui.selectable_value(&mut pick, d.path.clone(), format!("{} ({})", d.name, d.path.display()));
+                            }
+                        });
+                        if pick != cur {
+                            self.settings.virtual_cam = Some(pick);
+                            self.vcam = None;
+                        }
+                    }
+                    if changed {
+                        // switched: (re)open on the next rendered frame
+                        self.vcam = None;
+                    }
+                });
+                ui.end_row();
                 ui.label("Encoding");
                 let hw = self.vaapi.load(Ordering::Relaxed);
                 ui.add_enabled(hw, egui::Checkbox::new(&mut self.settings.hw_encode, "use the GPU for MP4 (VAAPI)"))
@@ -1111,9 +1366,16 @@ impl PhthoraApp {
                 ui.end_row();
             });
         });
+        if open && !self.show_settings || self.devices.is_empty() && open {
+            self.devices = phthora_media::list_devices();
+        }
         if open != self.show_settings || !open {
             self.settings.background = self.engine.background;
-            self.settings.flip_x = self.engine.flip_x;
+            if matches!(self.source, Source::Live(_)) {
+                self.settings.flip_webcam = self.engine.flip_x;
+            } else {
+                self.settings.flip_x = self.engine.flip_x;
+            }
             if self.show_settings && !open {
                 self.settings.save();
             }
@@ -1128,7 +1390,12 @@ impl PhthoraApp {
         let mut open = true;
         let mut start = false;
         let mut cancel = false;
+        let live = matches!(self.source, Source::Live(_));
         egui::Window::new("Export").open(&mut open).resizable(false).show(ctx, |ui| {
+            if live {
+                ui.label("The webcam has no fixed length: record it with ● Rec,\nthe recording opens here for the export.");
+                return;
+            }
             let running = self.export.running.is_some();
             ui.add_enabled_ui(!running, |ui| {
                 egui::Grid::new("export").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -1357,7 +1624,11 @@ impl eframe::App for PhthoraApp {
         self.audio.stop();
         self.settings.audio = self.audio.settings.clone();
         self.settings.background = self.engine.background;
-        self.settings.flip_x = self.engine.flip_x;
+        if matches!(self.source, Source::Live(_)) {
+            self.settings.flip_webcam = self.engine.flip_x;
+        } else {
+            self.settings.flip_x = self.engine.flip_x;
+        }
         self.settings.save();
     }
 }
