@@ -22,7 +22,8 @@ use phthora_media::{Backend, Format, MediaInfo, MediaKind, Quality};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const MAX_DIM: u32 = 4096;
 const DEFAULT_SIZE: (u32, u32) = (1280, 720);
@@ -145,6 +146,11 @@ pub struct PhthoraApp {
     settings: Settings,
     show_settings: bool,
     show_about: bool,
+    /// preview in a window of its own (second screen, projector)
+    popout: bool,
+    popout_on_top: bool,
+    /// state shared with the preview window, which runs its own passes (see `popout_window`)
+    popout_state: Arc<Mutex<Popout>>,
     dialog: Option<Dialog>,
     /// the user confirmed quitting while an export runs
     quit_ok: bool,
@@ -215,6 +221,9 @@ impl PhthoraApp {
             settings,
             show_settings: false,
             show_about: false,
+            popout: false,
+            popout_on_top: false,
+            popout_state: Arc::default(),
             dialog: None,
             quit_ok: false,
             preset_folder: None,
@@ -891,6 +900,9 @@ impl PhthoraApp {
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::Comma))) {
             self.show_settings = !self.show_settings;
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::P))) {
+            self.popout = !self.popout;
+        }
         // Esc closes the topmost window (dialogs close themselves)
         if self.dialog.is_none() && !typing && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             if self.show_about {
@@ -994,6 +1006,11 @@ impl PhthoraApp {
                 if ui.button("Open log folder").clicked() {
                     open_path(&store::log_dir());
                 }
+                ui.separator();
+                if ui.add(egui::Button::new("Preview window").selected(self.popout).shortcut_text("Ctrl+P")).clicked() {
+                    self.popout = !self.popout;
+                }
+                ui.add_enabled(self.popout, egui::Checkbox::new(&mut self.popout_on_top, "Preview window on top"));
                 ui.separator();
                 if ui.add(egui::Button::new("Settings").shortcut_text("Ctrl+,")).clicked() {
                     self.show_settings = true;
@@ -1768,6 +1785,39 @@ impl PhthoraApp {
         }
     }
 
+    /// The preview in its own window: fits the window on black, double click or F11 for full
+    /// screen, Esc leaves full screen or closes it. A deferred viewport, so the window keeps
+    /// answering when the main window is hidden: eframe then stops running our ui on Wayland
+    /// (no frame callbacks), and an immediate viewport would freeze along with it.
+    fn popout_window(&mut self, ctx: &egui::Context) {
+        let moving = (self.playing && self.timing.mode == OutputMode::Video) || matches!(self.source, Source::Live(_));
+        {
+            let mut st = self.popout_state.lock().unwrap();
+            if st.closed {
+                st.closed = false;
+                st.fullscreen = false;
+                self.popout = false;
+            }
+            st.tex = self.display.as_ref().map(|(_, id)| *id);
+            st.size = self.out_size;
+            st.moving = moving;
+            st.heartbeat = Some(Instant::now());
+        }
+        if !self.popout {
+            return;
+        }
+        let (w, h) = self.out_size;
+        let level = if self.popout_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal };
+        let builder = egui::ViewportBuilder::default()
+            .with_title("phthora preview")
+            .with_app_id("phthora")
+            .with_inner_size([w as f32 / 2.0, h as f32 / 2.0])
+            .with_window_level(level);
+        let state = self.popout_state.clone();
+        ctx.show_viewport_deferred(popout_id(), builder, move |ui, _class| popout_ui(ui, &state));
+        ctx.request_repaint_of(popout_id());
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.dialog else { return };
         let mut close = false;
@@ -2002,6 +2052,7 @@ impl eframe::App for PhthoraApp {
         }
         self.dialogs(&ctx);
         self.about_window(&ctx);
+        self.popout_window(&ctx);
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let input_audio = self.input_audio_usable();
@@ -2045,5 +2096,58 @@ fn open_path(p: &Path) {
     let _ = std::fs::create_dir_all(p);
     if let Err(e) = std::process::Command::new("xdg-open").arg(p).spawn() {
         tracing::warn!("xdg-open {}: {e}", p.display());
+    }
+}
+
+fn popout_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("preview window")
+}
+
+#[derive(Default)]
+struct Popout {
+    tex: Option<egui::TextureId>,
+    size: (u32, u32),
+    /// the preview should be changing (video playing or webcam)
+    moving: bool,
+    /// last pass of the main window
+    heartbeat: Option<Instant>,
+    fullscreen: bool,
+    /// closed by the user, the main window resets `popout`
+    closed: bool,
+}
+
+fn popout_ui(ui: &mut egui::Ui, state: &Mutex<Popout>) {
+    let mut st = state.lock().unwrap();
+    let avail = ui.max_rect();
+    let resp = ui.allocate_rect(avail, Sense::click());
+    let painter = ui.painter_at(avail);
+    painter.rect_filled(avail, 0.0, Color32::BLACK);
+    let (w, h) = (st.size.0.max(1) as f32, st.size.1.max(1) as f32);
+    let scale = (avail.width() / w).min(avail.height() / h);
+    let rect = Rect::from_center_size(avail.center(), Vec2::new(w * scale, h * scale));
+    if let Some(id) = st.tex {
+        painter.image(id, rect, Rect::from_min_max(Pos2::new(0.0, 1.0), Pos2::new(1.0, 0.0)), Color32::WHITE);
+    }
+    if st.moving {
+        if st.heartbeat.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+            let text = "Paused while the main window is hidden. Put this window on another screen.";
+            let galley = painter.layout_no_wrap(text.into(), egui::FontId::proportional(14.0), Color32::from_gray(220));
+            let pos = avail.left_bottom() + Vec2::new(12.0, -12.0 - galley.size().y);
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(6.0), 4.0, Color32::from_black_alpha(200));
+            painter.galley(pos, galley, Color32::WHITE);
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+    }
+    let (esc, f11, closing) = ui.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::F11), i.viewport().close_requested()));
+    if resp.double_clicked() || f11 {
+        st.fullscreen = !st.fullscreen;
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(st.fullscreen));
+    } else if esc && st.fullscreen {
+        st.fullscreen = false;
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+    } else if esc || closing {
+        st.closed = true;
+        // the main window may be asleep (still image): wake it to drop the window
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
     }
 }
