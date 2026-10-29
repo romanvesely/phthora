@@ -176,10 +176,14 @@ mod tests {
             .unwrap();
         assert!(st.success());
         let mut chain = Chain::default();
-        for id in ["feedback", "pixel_sort", "data_mosh", "audio_visualizer", "rgb_shift"] {
+        for id in ["feedback", "pixel_sort", "data_mosh", "slit_scan", "audio_visualizer", "rgb_shift"] {
             let uid = chain.add(id).unwrap();
             chain.get_mut(uid).unwrap().seed = 0.37;
         }
+        // an isolated group around two history effects
+        let g = chain.make_group(chain.effects[1].uid).unwrap();
+        chain.effects[2].group = Some(g);
+        chain.group_mut(g).unwrap().isolate = true;
         let last = chain.effects.last_mut().unwrap();
         last.modulators.insert(
             "amount".into(),
