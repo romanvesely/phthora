@@ -2,7 +2,7 @@
 
 Real-time GPU effect mixer for images, video and GIFs.
 
-Load a picture or a clip, stack effects, animate their parameters (by curves, by the
+Load a picture, a clip or the webcam, stack effects, animate their parameters (by curves, by the
 music or by a MIDI controller) and export the result as PNG, MP4, WebM (with
 transparency) or GIF. Everything renders on the GPU
 through [wgpu](https://wgpu.rs), so the preview runs at full frame rate and the
@@ -10,7 +10,7 @@ export looks exactly like the preview.
 
 ## Features
 
-- **Effect stack**: 63 effects in eleven groups, applied top to bottom. Each effect can be
+- **Effect stack**: 65 effects in eleven groups, applied top to bottom. Each effect can be
   toggled, locked, duplicated, renamed, reset and reordered by drag and drop.
 - **Chaos**: one click builds a random chain with random settings (locked effects stay).
   Shuffle reorders the stack.
@@ -26,6 +26,16 @@ export looks exactly like the preview.
   export reacts exactly like the preview.
 - **MIDI**: all connected MIDI inputs are used. Controllers and notes map to a
   parameter with Learn; the export holds the values set when it starts.
+- **Drawing**: Push Draw smears the image along mouse strokes, Mask Draw paints a mask
+  (or erases it). The drawing is part of the preset.
+- **Mouse camera**: with *mouse controls* on, Transform 3D and Luma Mesh orbit with the
+  left button, pan with the right button and zoom with the wheel. The view is saved in
+  the preset and used by the export.
+- **Webcam**: live input from any V4L2 camera (Ctrl+W), mirrored by default. Effects
+  loop every four seconds of real time. Recordings (with the microphone when it is the
+  audio source) open as the input, ready for the export.
+- **Virtual camera**: send the preview to a v4l2loopback device and use it in video
+  calls, streaming or recording software.
 - **Input playback**: trim the input, change its speed (0.1× to 4×) and play it
   forwards, backwards or ping-pong.
 - **Image and video mode**: in image mode a seed replaces time, so every still can be
@@ -52,17 +62,19 @@ export looks exactly like the preview.
 | Tone and Contrast | Posterize, Solarize, Edges, Bleach, Sharpen |
 | Dots and Pixels | Pixelate, Dot Matrix, Polar, 8-Bit, Half Tone, LinoCut, Dither, ASCII |
 | Color | Color Correction, Hue Cycle, DuoTone, Rainbow, InstaColor |
-| Optics | RGB Shift, Vignette, Tilt Shift, Barrel Blur, Glow, Blur |
+| Optics | RGB Shift, Vignette, Tilt Shift, Barrel Blur, Glow, Blur, Push Draw |
 | Screen and Film | Super8, VHS, CRT, ScanLines, Grain |
 | Content Layers | Media, Caption, Color Gradient, Audio Visualizer |
-| Masking | Mask, Mask Blocks, ChromaKey |
+| Masking | Mask, Mask Blocks, Mask Draw, ChromaKey |
 
 Mask effects cut out the effect directly above them.
 
 ## Requirements
 
 - A GPU with Vulkan, Metal or DirectX 12 support
-- `ffmpeg` and `ffprobe` in `PATH` (video input and all exports)
+- `ffmpeg` and `ffprobe` in `PATH` (video input, webcam and all exports)
+- Optional: the `v4l2loopback` kernel module for the virtual camera, e.g.
+  `modprobe v4l2loopback exclusive_caps=1 card_label=phthora`
 - Rust 1.95 or newer to build
 
 Developed and tested on Linux (Wayland, AMD RADV). Other platforms supported by
@@ -85,6 +97,7 @@ as a preset.
 |---|---|
 | Space | Play / pause |
 | Ctrl+O | Open file |
+| Ctrl+W | Webcam on / off |
 | Ctrl+S | Export |
 | Ctrl+M | Chaos |
 | Ctrl+Z | Undo |
@@ -145,6 +158,7 @@ phthora render --effect audio_visualizer --audio song.mp3 --size 1280x720 --out 
 | What | Where (Linux) |
 |---|---|
 | Presets | `$XDG_DATA_HOME/phthora/presets` (default `~/.local/share/phthora/presets`) |
+| Webcam recordings | `$XDG_DATA_HOME/phthora/recordings` |
 | Settings | `$XDG_CONFIG_HOME/phthora/settings.json` |
 | Assets | `assets/` next to the binary, or `PHTHORA_ASSETS` |
 
@@ -158,7 +172,7 @@ cargo test --workspace
 |---|---|
 | `crates/core` | effect catalog, parameters, chain, timing, modulators, presets |
 | `crates/gpu` | wgpu engine, shader effects, multi-pass and history effects, text, assets |
-| `crates/media` | probing, decoding (background clip reader) and encoding through ffmpeg |
+| `crates/media` | probing, decoding (background clip reader), encoding, webcam and virtual camera through ffmpeg |
 | `crates/audio` | spectrum analysis, band levels, analysed tracks, playback, microphone, MIDI |
 | `crates/app` | the editor (eframe/egui) and the command line |
 
@@ -166,8 +180,7 @@ Shaders live in `shaders/` as WGSL, one file per pass.
 
 ## Not yet included
 
-Webcam input, the drawing effects (push and mask painting) and effect groups are
-planned for a later version.
+Effect groups, Slit Scan and background removal are planned for a later version.
 
 ## License
 
