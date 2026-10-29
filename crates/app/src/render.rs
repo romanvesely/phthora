@@ -1,12 +1,11 @@
 //! Offline rendering of an effect chain to a file (export and command line).
 
 use crate::pipeline::InputVideo;
-use phthora_audio::{AudioSettings, AudioTrack, FrameLevels};
+use phthora_audio::{AudioSettings, AudioTrack, FrameLevels, MidiValues};
 use phthora_core::modulator::LiveInputs;
 use phthora_core::{EffectInstance, OutputMode, Playback, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Readback};
 use phthora_media::{AudioSource, Backend, EncodeSettings, Encoder, Format, MediaKind, Quality};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -29,6 +28,8 @@ pub struct ExportJob {
     /// analysed track for audio modulators (its used part set)
     pub audio_track: Option<AudioTrack>,
     pub audio_settings: AudioSettings,
+    /// MIDI values at the start of the export (held for every frame)
+    pub midi: MidiValues,
     pub out: PathBuf,
 }
 
@@ -79,7 +80,6 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
     }
 
     let mut levels = FrameLevels::default();
-    let midi = HashMap::new();
     let mut readback = Readback::new(ctx, &engine.lib, w, h);
     let mut done = 0u64;
     let mut emit = |px: Vec<u8>, done: &mut u64| -> Result<(), String> {
@@ -105,7 +105,7 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
             live.audio[k] = *v;
         }
         engine.audio_spectrum.clone_from(&lv.spectrum);
-        let resolved: Vec<_> = job.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(&ft, &live, &midi)).collect();
+        let resolved: Vec<_> = job.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(&ft, &live, &job.midi)).collect();
         engine.render(&resolved, &ft);
         if let Some(px) = readback.push(engine.output(), engine.blank()) {
             emit(px, &mut done)?;

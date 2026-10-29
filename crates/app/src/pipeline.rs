@@ -172,6 +172,10 @@ mod tests {
         // an audio-driven parameter on the first effect
         let fb = chain.effects[0].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
         chain.effects[0].modulators.insert(fb, Modulator { enabled: true, shape: Shape::Audio, band: Band::Low, seed: 2.0, ..Default::default() });
+        // a MIDI-mapped parameter holds the value it had when the export started
+        let dm = chain.effects[2].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
+        chain.effects[2].modulators.insert(dm, Modulator { enabled: true, shape: Shape::Midi, midi_cc: Some(21), midi_device: "knobs".into(), ..Default::default() });
+        let midi: HashMap<(String, u8), f64> = HashMap::from([(("knobs".to_string(), 21), 0.7)]);
         let pcm: Vec<f32> = (0..44100 * 2).map(|i| (i as f32 * 0.012).sin() * ((i / 4000) % 3) as f32 * 0.4).collect();
         let mut track = AudioTrack::from_pcm(pcm);
         track.start = 0.3;
@@ -195,6 +199,7 @@ mod tests {
             audio: None,
             audio_track: Some(track.clone()),
             audio_settings: audio_settings.clone(),
+            midi: midi.clone(),
             out: dir.join("unused.mp4"),
         };
         let ctx = GpuContext::headless().expect("gpu");
@@ -227,7 +232,7 @@ mod tests {
             engine.audio_spectrum.clone_from(&lv.spectrum);
             audio_moved |= live.audio[1] > 0.05;
             loop {
-                let fx = chain.resolve(&ft, &live, &HashMap::new());
+                let fx = chain.resolve(&ft, &live, &midi);
                 match preview.step(&mut engine, Some(&video), n, &timing, fx) {
                     Step::Rendered => break,
                     Step::Waiting => std::thread::sleep(std::time::Duration::from_millis(1)),
@@ -235,7 +240,7 @@ mod tests {
                 }
             }
             // a repaint without changes does not render again (history would advance)
-            let fx = chain.resolve(&ft, &live, &HashMap::new());
+            let fx = chain.resolve(&ft, &live, &midi);
             assert_eq!(preview.step(&mut engine, Some(&video), n, &timing, fx), Step::Unchanged);
             let mut px = engine.read_output();
             phthora_gpu::context::unpremultiply(&mut px);

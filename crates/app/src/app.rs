@@ -1,6 +1,7 @@
 //! Main window.
 
 use crate::audio_ui::{AudioState, Src};
+use phthora_audio::{MidiIn, MidiValues};
 use crate::params_ui::{self, Action, ParamCtx};
 use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
@@ -31,6 +32,17 @@ enum Source {
 /// A running export: worker thread, progress, start time.
 type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
 
+/// MIDI learn in progress: the parameter, the message count when it began, the start time.
+struct Learn {
+    uid: u64,
+    key: String,
+    since: u64,
+    started: Instant,
+}
+
+/// How long MIDI learn waits for a message.
+const LEARN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 struct ExportUi {
     open: bool,
     format: Format,
@@ -45,6 +57,10 @@ pub struct PhthoraApp {
     chain: Chain,
     history: History,
     preview: Preview,
+    midi: MidiIn,
+    midi_values: MidiValues,
+    /// modulator waiting for the next MIDI message
+    learning: Option<Learn>,
     playback: Playback,
     /// VAAPI H.264 works here (checked in the background at start)
     vaapi: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -101,6 +117,9 @@ impl PhthoraApp {
             chain: Chain::default(),
             history: History::default(),
             preview: Preview::default(),
+            midi: MidiIn::start(),
+            midi_values: MidiValues::new(),
+            learning: None,
             playback: Playback::default(),
             vaapi: Default::default(),
             timing: TimingSettings::default(),
@@ -138,6 +157,23 @@ impl PhthoraApp {
         let flag = app.vaapi.clone();
         std::thread::spawn(move || flag.store(phthora_media::vaapi_available(), Ordering::Relaxed));
         app
+    }
+
+    /// Take the newest MIDI values and finish a pending learn.
+    fn poll_midi(&mut self) {
+        self.midi_values = self.midi.values();
+        let Some(l) = &self.learning else { return };
+        if let Some((dev, num)) = self.midi.last_since(l.since) {
+            if let Some(m) = self.chain.get_mut(l.uid).and_then(|e| e.modulators.get_mut(&l.key)) {
+                m.midi_cc = Some(num);
+                m.midi_device = dev.clone();
+            }
+            self.learning = None;
+            self.notify(format!("MIDI {num} on {dev} mapped"));
+        } else if l.started.elapsed() > LEARN_TIMEOUT {
+            self.learning = None;
+            self.notify("MIDI learn: nothing received");
+        }
     }
 
     fn notify(&mut self, s: impl Into<String>) {
@@ -351,6 +387,7 @@ impl PhthoraApp {
             audio,
             audio_track: self.audio.track.clone().filter(|_| self.audio.src != Src::Mic),
             audio_settings: self.audio.settings.clone(),
+            midi: self.midi_values.clone(),
             out,
         };
         let ctx = self.engine.ctx.clone();
@@ -412,7 +449,8 @@ impl PhthoraApp {
         self.last_ft = ft;
         let live = self.audio.inputs(n, timing.fps);
         self.engine.audio_spectrum.clone_from(&self.audio.spectrum);
-        let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &HashMap::new());
+        self.poll_midi();
+        let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &self.midi_values);
         self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
         let video = match &self.source {
             Source::Video(v) => Some(v),
@@ -646,6 +684,7 @@ impl PhthoraApp {
         let mode = self.timing.mode;
         let playhead = self.last_ft.export_progress;
         let custom_bands = self.audio.settings.custom.len();
+        let blink = self.learning.as_ref().is_some_and(|l| l.started.elapsed().as_millis() / 300 % 2 == 0);
         if n == 0 {
             ui.add_space(12.0);
             ui.label(egui::RichText::new("No effects. Add one from the list on the left, or press Chaos.").weak());
@@ -712,7 +751,8 @@ impl PhthoraApp {
                         });
                     });
                     if e.expanded {
-                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands };
+                        let learning = self.learning.as_ref().map(|l| (l.uid, l.key.as_str()));
+                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink };
                         params_ui::effect_params(ui, e, &mut cx);
                     }
                 })
@@ -1000,6 +1040,16 @@ impl PhthoraApp {
     fn handle_actions(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::LearnMidi { uid, key } => {
+                    let since = self.midi.seq();
+                    self.learning = Some(Learn { uid, key, since, started: Instant::now() });
+                    let devices = self.midi.devices();
+                    if devices.is_empty() {
+                        self.notify("MIDI learn: no MIDI input connected");
+                    } else {
+                        self.notify(format!("MIDI learn: move a controller ({})", devices.join(", ")));
+                    }
+                }
                 Action::PickFile { uid } => {
                     let Some(e) = self.chain.get_mut(uid) else { continue };
                     let image_only = e.desc.id == "mask";
@@ -1107,8 +1157,13 @@ impl eframe::App for PhthoraApp {
             self.history.observe(&self.chain.effects);
         }
         // keep animating at the output frame rate
-        if self.audio.loading() {
+        if self.audio.loading() || self.learning.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        // MIDI controllers change values without any window input
+        let midi_mapped = self.chain.effects.iter().any(|e| e.enabled && e.modulators.values().any(|m| m.enabled && m.shape == phthora_core::modulator::Shape::Midi));
+        if midi_mapped && self.timing.mode == OutputMode::Video {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
         if self.waiting {
             self.waiting = false;

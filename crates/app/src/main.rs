@@ -224,7 +224,7 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         }
         None => None,
     };
-    let job = render::ExportJob { input, playback, effects, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, out };
+    let job = render::ExportJob { input, playback, effects, timing, width: w & !1, height: h & !1, background, flip_x, format, quality, backend, audio, audio_track, audio_settings, midi: Default::default(), out };
     let ctx = phthora_gpu::GpuContext::headless()?;
     let progress = render::Progress::default();
     let t0 = std::time::Instant::now();

@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, HashSet};
 pub enum Action {
     /// a "Load..." button: pick a file for the effect's `path`
     PickFile { uid: u64 },
+    /// map the next MIDI controller or note to this parameter's modulator
+    LearnMidi { uid: u64, key: String },
 }
 
 pub struct ParamCtx<'a> {
@@ -20,6 +22,9 @@ pub struct ParamCtx<'a> {
     pub open_mods: &'a mut HashSet<(u64, String)>,
     /// user audio bands defined in the audio settings
     pub custom_bands: usize,
+    /// modulator waiting for a MIDI message (uid, parameter) and whether it is lit now
+    pub learning: Option<(u64, &'a str)>,
+    pub blink: bool,
 }
 
 const LABEL_W: f32 = 92.0;
@@ -105,8 +110,13 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                 }
                 if cx.open_mods.contains(&(uid, key.clone())) {
                     let m = e.modulators.entry(key.clone()).or_default();
-                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), cx.playhead, cx.custom_bands) {
+                    let learn = cx.learning.is_some_and(|(u, k)| u == uid && k == key).then_some(cx.blink);
+                    let mut learn_clicked = false;
+                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), cx.playhead, cx.custom_bands, learn, &mut learn_clicked) {
                         changed = true;
+                    }
+                    if learn_clicked {
+                        cx.actions.push(Action::LearnMidi { uid, key: key.clone() });
                     }
                 }
             }
@@ -236,17 +246,14 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
 
 const SPEEDS: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 
-fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64, custom_bands: usize) -> bool {
+/// `learning`: this modulator waits for MIDI (value: lit in this blink phase).
+fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64, custom_bands: usize, learning: Option<bool>, learn_clicked: &mut bool) -> bool {
     let before = m.clone();
     egui::Frame::group(ui.style()).inner_margin(6.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.checkbox(&mut m.enabled, "on");
             egui::ComboBox::from_id_salt(id.with("shape")).selected_text(m.shape.label()).width(80.0).show_ui(ui, |ui| {
                 for s in Shape::ALL {
-                    // MIDI input is not available yet
-                    if s == Shape::Midi {
-                        continue;
-                    }
                     ui.selectable_value(&mut m.shape, s, s.label());
                 }
             });
@@ -257,6 +264,27 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f6
                         ui.selectable_value(&mut m.band, b, b.name());
                     }
                 });
+            } else if m.shape == Shape::Midi {
+                let text = match m.midi_cc {
+                    Some(cc) => format!("{cc}"),
+                    None => "--".into(),
+                };
+                let mut t = egui::RichText::new(text).monospace();
+                if learning == Some(true) {
+                    t = t.color(Color32::BLACK).background_color(Color32::from_rgb(120, 220, 160));
+                } else if m.midi_cc.is_some() {
+                    t = t.color(Color32::from_rgb(120, 220, 160));
+                }
+                let hover = if m.midi_device.is_empty() { "MIDI controller or note".to_string() } else { format!("MIDI controller or note on {}", m.midi_device) };
+                ui.label(t).on_hover_text(hover);
+                let learn = if learning.is_some() { "Waiting…" } else { "Learn" };
+                if ui.small_button(learn).on_hover_text("Map the next controller you move (8 s)").clicked() {
+                    *learn_clicked = true;
+                }
+                if ui.add_enabled(m.midi_cc.is_some(), egui::Button::new("Forget").small()).clicked() {
+                    m.midi_cc = None;
+                    m.midi_device.clear();
+                }
             } else if m.shape != Shape::Keys {
                 ui.checkbox(&mut m.looped, "loop").on_hover_text("Speed relative to the effect loop instead of the whole output");
             }
@@ -267,6 +295,8 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f6
             }
             keyframe_editor(ui, id.with("keys"), &mut m.keyframes, playhead);
             ui.label(egui::RichText::new("click: add · drag: move · right click: delete").small().weak());
+        } else if m.shape == Shape::Midi {
+            // the controller value maps straight onto the parameter range
         } else {
             egui::Grid::new(id.with("grid")).num_columns(4).spacing([6.0, 2.0]).show(ui, |ui| {
                 ui.label("speed");

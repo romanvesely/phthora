@@ -135,6 +135,32 @@ mod tests {
     }
 
     #[test]
+    fn midi_mapping_roundtrip() {
+        let mut c = crate::chain::Chain::default();
+        let uid = c.add("rgb_shift").unwrap();
+        let m = c.get_mut(uid).unwrap().modulators.entry("amount".into()).or_default();
+        m.enabled = true;
+        m.shape = crate::modulator::Shape::Midi;
+        m.midi_cc = Some(21);
+        m.midi_device = "nanoKONTROL2".into();
+        let (d, _) = from_json(&to_json(&c.effects)).unwrap();
+        let m = &d[0].modulators["amount"];
+        assert_eq!((m.shape, m.midi_cc, m.midi_device.as_str()), (crate::modulator::Shape::Midi, Some(21), "nanoKONTROL2"));
+        // the mapped value sets the parameter across its whole range
+        let t = crate::TimingSettings::default().at_frame(3);
+        let midi = std::collections::HashMap::from([(("nanoKONTROL2".to_string(), 21u8), 1.0)]);
+        let r = d[0].resolve(&t, &Default::default(), &midi);
+        let max = match d[0].desc.param("amount").unwrap().kind {
+            crate::params::ParamKind::Float { max, .. } => max,
+            _ => unreachable!(),
+        };
+        assert_eq!(r.values["amount"], crate::params::Value::Float(max));
+        // nothing received yet: the slider value stays
+        let r = d[0].resolve(&t, &Default::default(), &Default::default());
+        assert_eq!(r.values["amount"], d[0].values["amount"]);
+    }
+
+    #[test]
     fn unavailable_effects_are_skipped() {
         let s = r#"{"version":1,"effects":[{"effect":"definitely_not_an_effect"},{"effect":"pixelate"}]}"#;
         let (fx, warn) = from_json(s).unwrap();
