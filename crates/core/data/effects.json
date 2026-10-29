@@ -1,0 +1,3508 @@
+[
+ {
+  "id": "transform",
+  "name": "Transform",
+  "category": "Reframing",
+  "kind": "shader",
+  "shader": "transform",
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "x",
+    "label": "Position X",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "y",
+    "label": "Position Y",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "scalex",
+    "label": "scale X",
+    "type": "float",
+    "min": 0.1,
+    "max": 3,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "scaley",
+    "label": "Scale Y",
+    "type": "float",
+    "min": 0.1,
+    "max": 3,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "repeat",
+    "label": "repeat",
+    "type": "bool",
+    "default": true
+   }
+  ]
+ },
+ {
+  "id": "transform_3d",
+  "name": "Transform 3D",
+  "category": "Reframing",
+  "kind": "custom",
+  "shader": null,
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "xPos",
+    "label": "Position X",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "yPos",
+    "label": "Position Y",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "xRot",
+    "label": "Rotation X",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "yRot",
+    "label": "Rotation Y",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "zRot",
+    "label": "Rotation Z",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "xScale",
+    "label": "Scale X",
+    "type": "float",
+    "min": 0.1,
+    "max": 3,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "yScale",
+    "label": "Scale Y",
+    "type": "float",
+    "min": 0.1,
+    "max": 3,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "mouseControls",
+    "label": "Mouse Controls",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
+  "id": "luma_mesh",
+  "name": "Luma Mesh",
+  "category": "Displacement and Glitch",
+  "kind": "custom",
+  "shader": null,
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "meshOpacity",
+    "label": "Mesh Opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "gridOpacity",
+    "label": "Grid Opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.6,
+    "rand": "full"
+   },
+   {
+    "key": "lumaHeight",
+    "label": "Luma Height",
+    "type": "float",
+    "min": 0,
+    "max": 1.5,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "lumaInvert",
+    "label": "Luma Invert",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "bandsHeight",
+    "label": "Bands Height",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "warpHeight",
+    "label": "Warp Height",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "tiltAmount",
+    "label": "Tilt Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "tiltSpeed",
+    "label": "Tilt Speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "gridColor",
+    "label": "Grid Color",
+    "type": "color",
+    "default": "#ffffff"
+   },
+   {
+    "key": "mouseControls",
+    "label": "Mouse Controls",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "data_mosh",
+  "name": "Data Mosh",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": "data_mosh_displace",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "full"
+   },
+   {
+    "key": "blockiness",
+    "label": "blockiness",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "full"
+   },
+   {
+    "key": "flow",
+    "label": "flow",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "decimate",
+  "name": "Decimate",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": "decimate1",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "colorize",
+    "label": "Colorize",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.1,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "optical_flow",
+  "name": "Optical Flow",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": "ofdisplace",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "distortion",
+    "label": "distortion",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "feedback",
+  "name": "Feedback",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": "feedback",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "scale",
+    "label": "Scale",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "rotate",
+    "label": "Rotate",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "warp",
+    "label": "Warp",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "hueShift",
+    "label": "Hue Shift",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "low"
+   }
+  ]
+ },
+ {
+  "id": "watercolor",
+  "name": "Watercolor",
+  "category": "Time-Based",
+  "kind": "custom",
+  "shader": "watercolor",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "flow",
+    "label": "Flow",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "direction",
+    "label": "direction",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "bulge",
+  "name": "Bulge",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "bulge",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "slices",
+  "name": "Slices",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "slices",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "slices",
+    "label": "count",
+    "type": "float",
+    "min": 1,
+    "max": 100,
+    "step": 1,
+    "default": 40,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   },
+   {
+    "key": "speedV",
+    "label": "Vert Speed",
+    "type": "float",
+    "min": 0,
+    "max": 6,
+    "step": 1,
+    "default": 1,
+    "rand": "low"
+   },
+   {
+    "key": "speedH",
+    "label": "Horiz Speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 3.0,
+    "step": 1,
+    "default": 1.0,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "stretch",
+  "name": "Stretch",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "stretch",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "center",
+    "label": "center",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "wave",
+    "label": "wave",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "jaggies",
+    "label": "jaggies",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "jitter",
+  "name": "Jitter",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "jitter",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 1.0,
+    "step": 0.01,
+    "default": 0.8,
+    "rand": "high"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "melt",
+  "name": "Melt",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "melt",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "low"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.2,
+    "max": 2,
+    "step": 0.01,
+    "default": 1,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.1,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "wobble",
+  "name": "Wobble",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "wobble",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "strength",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "low"
+   },
+   {
+    "key": "size",
+    "label": "size",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 3.0,
+    "step": 1.0,
+    "default": 1.0,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "wave",
+  "name": "Wave",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "wave",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "low"
+   },
+   {
+    "key": "size",
+    "label": "size",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "position",
+    "label": "position",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "shake",
+  "name": "Shake",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "shake",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.1,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "bad_tv",
+  "name": "Bad TV",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "bad_tv",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "distortion",
+    "label": "Thick Distort",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "distortion2",
+    "label": "Fine Distort",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "low"
+   },
+   {
+    "key": "rollSpeed",
+    "label": "Roll Speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 3.0,
+    "step": 1.0,
+    "default": 1.0,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "soft_glitch",
+  "name": "Soft Glitch",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "soft_glitch",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "hard_glitch",
+  "name": "Hard Glitch",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "glitch",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "colorSplit",
+    "label": "color Split",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "smear",
+  "name": "Smear",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "smear",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 3.0,
+    "step": 1.0,
+    "default": 1.0,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "strobe",
+  "name": "Strobe",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "strobe",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "low"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 4,
+    "max": 30,
+    "step": 1,
+    "default": 8,
+    "rand": "high"
+   },
+   {
+    "key": "random",
+    "label": "random",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "light_streak",
+  "name": "Light Streak",
+  "category": "Displacement and Glitch",
+  "kind": "shader",
+  "shader": "streak",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "low"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   },
+   {
+    "key": "shift",
+    "label": "shift",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.25,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "pixel_sort",
+  "name": "Pixel Sort",
+  "category": "Displacement and Glitch",
+  "kind": "custom",
+  "shader": "pixel_sort",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "mid"
+   },
+   {
+    "key": "threshold",
+    "label": "threshold",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "mid"
+   },
+   {
+    "key": "verticalSort",
+    "label": "vertical",
+    "type": "bool",
+    "default": true
+   },
+   {
+    "key": "reset",
+    "label": "reset",
+    "type": "button"
+   }
+  ]
+ },
+ {
+  "id": "mirror",
+  "name": "Mirror",
+  "category": "Repetition and Symmetry",
+  "kind": "shader",
+  "shader": "mirror",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none",
+    "no_random": true
+   },
+   {
+    "key": "side",
+    "label": "side",
+    "type": "float",
+    "min": 0,
+    "max": 3,
+    "step": 1,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "position2",
+    "label": "position",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "none"
+   }
+  ]
+ },
+ {
+  "id": "tile",
+  "name": "Tile",
+  "category": "Repetition and Symmetry",
+  "kind": "shader",
+  "shader": "tile",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "high",
+    "no_random": true
+   },
+   {
+    "key": "size",
+    "label": "size",
+    "type": "float",
+    "min": 0.1,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "high"
+   },
+   {
+    "key": "offset",
+    "label": "offset",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "mid"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 3.0,
+    "step": 1.0,
+    "default": 1.0,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "kaleido",
+  "name": "Kaleido",
+  "category": "Repetition and Symmetry",
+  "kind": "shader",
+  "shader": "kaleido",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none",
+    "no_random": true
+   },
+   {
+    "key": "sides",
+    "label": "sides",
+    "type": "float",
+    "min": 1,
+    "max": 24,
+    "step": 1,
+    "default": 6,
+    "rand": "low"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "splitter",
+  "name": "Splitter",
+  "category": "Repetition and Symmetry",
+  "kind": "shader",
+  "shader": "splitter",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "count",
+    "label": "count",
+    "type": "float",
+    "min": 3,
+    "max": 100,
+    "step": 1,
+    "default": 15,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "shift",
+    "label": "Shift",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "mid"
+   },
+   {
+    "key": "offsetV",
+    "label": "Offset",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "mid"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "mid"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "posterize",
+  "name": "Posterize",
+  "category": "Tone and Contrast",
+  "kind": "shader",
+  "shader": "posterize",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "levels",
+    "label": "levels",
+    "type": "float",
+    "min": 1,
+    "max": 10,
+    "step": 0.01,
+    "default": 4,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "solarize",
+  "name": "Solarize",
+  "category": "Tone and Contrast",
+  "kind": "shader",
+  "shader": "solarize",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "centerBrightness",
+    "label": "brightness",
+    "type": "float",
+    "min": 0.2,
+    "max": 0.8,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "powerCurve",
+    "label": "power",
+    "type": "float",
+    "min": 1.0,
+    "max": 3,
+    "step": 0.01,
+    "default": 2.0,
+    "rand": "low"
+   },
+   {
+    "key": "colorize",
+    "label": "colorize",
+    "type": "float",
+    "min": 0.0,
+    "max": 1.0,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "low"
+   }
+  ]
+ },
+ {
+  "id": "edges",
+  "name": "Edges",
+  "category": "Tone and Contrast",
+  "kind": "shader",
+  "shader": "edge",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "high"
+   },
+   {
+    "key": "passthru",
+    "label": "passthru",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "thickness",
+    "label": "thickness",
+    "type": "float",
+    "min": 0.5,
+    "max": 5,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "edgeCol",
+    "label": "Edge Color",
+    "type": "color",
+    "default": "#ffffff"
+   }
+  ]
+ },
+ {
+  "id": "bleach",
+  "name": "Bleach",
+  "category": "Tone and Contrast",
+  "kind": "shader",
+  "shader": "bleach",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "sharpen",
+  "name": "Sharpen",
+  "category": "Tone and Contrast",
+  "kind": "shader",
+  "shader": "sharpen",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "spread",
+    "label": "spread",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   }
+  ]
+ },
+ {
+  "id": "pixelate",
+  "name": "Pixelate",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "pixelate",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "pixelsX",
+    "label": "Horiz Pixels",
+    "type": "float",
+    "min": 1,
+    "max": 200,
+    "step": 1,
+    "default": 20,
+    "rand": "full"
+   },
+   {
+    "key": "pixelsY",
+    "label": "Vert Pixels",
+    "type": "float",
+    "min": 1,
+    "max": 200,
+    "step": 1,
+    "default": 20,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "dot_matrix",
+  "name": "Dot Matrix",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "dot_matrix",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "count",
+    "label": "count",
+    "type": "float",
+    "min": 1,
+    "max": 200,
+    "step": 1,
+    "default": 40,
+    "rand": "high"
+   },
+   {
+    "key": "size",
+    "label": "size",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "blur",
+    "label": "blur",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "polar",
+  "name": "Polar",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "polar_pixelate",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "pixelsX",
+    "label": "Radius",
+    "type": "float",
+    "min": 0.01,
+    "max": 0.1,
+    "step": 0.01,
+    "default": 0.05,
+    "rand": "low"
+   },
+   {
+    "key": "pixelsY",
+    "label": "Segments",
+    "type": "float",
+    "min": 0.01,
+    "max": 0.3,
+    "step": 0.01,
+    "default": 0.05,
+    "rand": "low"
+   }
+  ]
+ },
+ {
+  "id": "eight_bit",
+  "name": "8-Bit",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "cga",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "style",
+    "label": "style",
+    "type": "combo",
+    "values": [
+     "1982",
+     "1983",
+     "1984"
+    ],
+    "default": "1982"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 1,
+    "max": 40,
+    "step": 1,
+    "default": 2,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "half_tone",
+  "name": "Half Tone",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "half_tone",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.2,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.7,
+    "rand": "full"
+   },
+   {
+    "key": "cmyk",
+    "label": "CMYK",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
+  "id": "linocut",
+  "name": "LinoCut",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "linocut",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.5,
+    "max": 2,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "dither",
+  "name": "Dither",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "dither",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 1,
+    "max": 5,
+    "step": 1,
+    "default": 2,
+    "rand": "full"
+   },
+   {
+    "key": "colorize",
+    "label": "Colorize",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "ascii",
+  "name": "ASCII",
+  "category": "Dots and Pixels",
+  "kind": "shader",
+  "shader": "ascii",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "size",
+    "label": "Size",
+    "type": "float",
+    "min": 0.5,
+    "max": 4,
+    "step": 0.01,
+    "default": 1,
+    "rand": "mid"
+   },
+   {
+    "key": "colorize",
+    "label": "Colorize",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1.0,
+    "rand": "high"
+   },
+   {
+    "key": "charSet",
+    "label": "Char Set",
+    "type": "combo",
+    "values": [
+     "Barysh",
+     "Karpinsk",
+     "Okha",
+     "Luza",
+     "Sharya",
+     "Ukhta",
+     "Donetsk"
+    ],
+    "default": "Barysh"
+   }
+  ]
+ },
+ {
+  "id": "color_correction",
+  "name": "Color Correction",
+  "category": "Color",
+  "kind": "shader",
+  "shader": "color_correction",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "brightness",
+    "label": "brightness",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "mid"
+   },
+   {
+    "key": "contrast",
+    "label": "contrast",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "low"
+   },
+   {
+    "key": "saturation",
+    "label": "saturation",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "low"
+   },
+   {
+    "key": "hue",
+    "label": "hue offset",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "low"
+   },
+   {
+    "key": "invert",
+    "label": "invert",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
+  "id": "hue_cycle",
+  "name": "Hue Cycle",
+  "category": "Color",
+  "kind": "shader",
+  "shader": "hue_cycle",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "none"
+   },
+   {
+    "key": "hue",
+    "label": "hue",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "Speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 4.0,
+    "step": 1,
+    "default": 1.0,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "duotone",
+  "name": "DuoTone",
+  "category": "Color",
+  "kind": "shader",
+  "shader": "duo_tone",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "colLight",
+    "label": "Light Color",
+    "type": "color",
+    "default": "#ff4a7d"
+   },
+   {
+    "key": "colDark",
+    "label": "Dark Color",
+    "type": "color",
+    "default": "#01215a"
+   }
+  ]
+ },
+ {
+  "id": "rainbow",
+  "name": "Rainbow",
+  "category": "Color",
+  "kind": "shader",
+  "shader": "rainbow",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "offset",
+    "label": "offset",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.25,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.0,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "Speed",
+    "type": "float",
+    "min": 0.0,
+    "max": 4.0,
+    "step": 1,
+    "default": 1.0,
+    "rand": "low"
+   },
+   {
+    "key": "palette",
+    "label": "palette",
+    "type": "float",
+    "min": 1.0,
+    "max": 4,
+    "step": 1,
+    "default": 1,
+    "rand": "low"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "instacolor",
+  "name": "InstaColor",
+  "category": "Color",
+  "kind": "shader",
+  "shader": "lut",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "high"
+   },
+   {
+    "key": "style",
+    "label": "style",
+    "type": "combo",
+    "values": [
+     "etikate",
+     "amatorka",
+     "brannan",
+     "earlybird",
+     "gotham",
+     "hefe",
+     "inkwell",
+     "lofi",
+     "kelvin",
+     "nashville",
+     "sutro",
+     "toaster",
+     "walden",
+     "xpro"
+    ],
+    "default": "etikate"
+   }
+  ]
+ },
+ {
+  "id": "rgb_shift",
+  "name": "RGB Shift",
+  "category": "Optics",
+  "kind": "shader",
+  "shader": "rgbshift",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.1,
+    "rand": "full"
+   },
+   {
+    "key": "angle",
+    "label": "Angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "mode",
+    "label": "Mode",
+    "type": "float",
+    "min": 0,
+    "max": 2,
+    "step": 1,
+    "default": 0,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "vignette",
+  "name": "Vignette",
+  "category": "Optics",
+  "kind": "shader",
+  "shader": "vignette",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "feather",
+    "label": "feather",
+    "type": "float",
+    "min": 0.01,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "roundness",
+    "label": "roundness",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "color",
+    "label": "Color",
+    "type": "color",
+    "default": "#000000"
+   }
+  ]
+ },
+ {
+  "id": "tilt_shift",
+  "name": "Tilt Shift",
+  "category": "Optics",
+  "kind": "shader",
+  "shader": "vertical_tilt_shift",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "v",
+    "label": "amount",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.01,
+    "rand": "low"
+   },
+   {
+    "key": "r",
+    "label": "position",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "barrel_blur",
+  "name": "Barrel Blur",
+  "category": "Optics",
+  "kind": "shader",
+  "shader": "barrel_blur",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 2,
+    "step": 0.01,
+    "default": 0.25,
+    "rand": "low"
+   },
+   {
+    "key": "invert",
+    "label": "invert",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "concave",
+    "label": "concave",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
+  "id": "glow",
+  "name": "Glow",
+  "category": "Optics",
+  "kind": "custom",
+  "shader": null,
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "threshold",
+    "label": "Cut Off",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "blur",
+  "name": "Blur",
+  "category": "Optics",
+  "kind": "custom",
+  "shader": null,
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "delta",
+    "label": "Distance",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "push_draw",
+  "name": "Push Draw",
+  "category": "Optics",
+  "kind": "custom",
+  "shader": "push",
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "rgb",
+    "label": "RGB",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "animate",
+    "label": "Animate",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "showMask",
+    "label": "Show Map",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "clear",
+    "label": "Clear",
+    "type": "button"
+   }
+  ]
+ },
+ {
+  "id": "super8",
+  "name": "Super8",
+  "category": "Screen and Film",
+  "kind": "shader",
+  "shader": "super8",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "burn",
+    "label": "Burn",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "dust",
+    "label": "Dust",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "frame",
+    "label": "Frame",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "roll",
+    "label": "Roll",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "vhs",
+  "name": "VHS",
+  "category": "Screen and Film",
+  "kind": "shader",
+  "shader": "vhs",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "timeOpacity",
+    "label": "Text",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.8,
+    "rand": "high"
+   },
+   {
+    "key": "staticOpacity",
+    "label": "Static",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "high"
+   },
+   {
+    "key": "bars",
+    "label": "bars",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "text1",
+    "label": "Text 1",
+    "type": "text",
+    "multiline": false,
+    "default": ""
+   },
+   {
+    "key": "text2",
+    "label": "Text 2",
+    "type": "text",
+    "multiline": false,
+    "default": ""
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "crt",
+  "name": "CRT",
+  "category": "Screen and Film",
+  "kind": "shader",
+  "shader": "crt",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "curve",
+    "label": "curve",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "vignette",
+    "label": "vignette",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.8,
+    "rand": "full"
+   },
+   {
+    "key": "brightness",
+    "label": "brightness",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   }
+  ]
+ },
+ {
+  "id": "scanlines",
+  "name": "ScanLines",
+  "category": "Screen and Film",
+  "kind": "shader",
+  "shader": "scanlines",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.25,
+    "rand": "low"
+   },
+   {
+    "key": "count",
+    "label": "width",
+    "type": "float",
+    "min": 0.2,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "high"
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0.0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "additive",
+     "multiply",
+     "screen",
+     "softlight"
+    ],
+    "default": "additive"
+   }
+  ]
+ },
+ {
+  "id": "grain",
+  "name": "Grain",
+  "category": "Screen and Film",
+  "kind": "shader",
+  "shader": "grain",
+  "randomizable": true,
+  "mask": false,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "RGB",
+    "label": "RGB",
+    "type": "bool",
+    "default": true
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "softlight",
+     "overlay",
+     "additive",
+     "multiply"
+    ],
+    "default": "softlight"
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "media",
+  "name": "Media",
+  "category": "Content Layers",
+  "kind": "shader",
+  "shader": "overlay",
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "fileName",
+    "label": "File",
+    "type": "info",
+    "default": ""
+   },
+   {
+    "key": "path",
+    "label": "path",
+    "type": "text",
+    "multiline": false,
+    "default": "",
+    "hidden": true
+   },
+   {
+    "key": "load",
+    "label": "Load...",
+    "type": "button"
+   },
+   {
+    "key": "opacity",
+    "label": "opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.7,
+    "rand": "full"
+   },
+   {
+    "key": "x",
+    "label": "Position X",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "y",
+    "label": "Position Y",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "scalex",
+    "label": "scale X",
+    "type": "float",
+    "min": 0.01,
+    "max": 4,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "scaley",
+    "label": "Scale Y",
+    "type": "float",
+    "min": 0.01,
+    "max": 4,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full",
+    "no_random": true
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "normal",
+     "additive",
+     "multiply",
+     "screen",
+     "softlight",
+     "difference"
+    ],
+    "default": "normal"
+   },
+   {
+    "key": "repeat",
+    "label": "repeat",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "maintianAspect",
+    "label": "Use Aspect Ratio",
+    "type": "bool",
+    "default": true
+   }
+  ]
+ },
+ {
+  "id": "caption",
+  "name": "Caption",
+  "category": "Content Layers",
+  "kind": "shader",
+  "shader": "caption",
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "text",
+    "label": "Text",
+    "type": "text",
+    "multiline": true,
+    "default": ""
+   },
+   {
+    "key": "x",
+    "label": "Position X",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "y",
+    "label": "Position Y",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "size",
+    "label": "Size",
+    "type": "float",
+    "min": 0.1,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.3,
+    "rand": "full"
+   },
+   {
+    "key": "lineHeight",
+    "label": "Line Height",
+    "type": "float",
+    "min": 0.5,
+    "max": 2,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "font",
+    "label": "Font",
+    "type": "combo",
+    "values": [],
+    "default": "Sans"
+   },
+   {
+    "key": "align",
+    "label": "Align",
+    "type": "combo",
+    "values": [
+     "left",
+     "center",
+     "right"
+    ],
+    "default": "left"
+   },
+   {
+    "key": "color",
+    "label": "Color",
+    "type": "color",
+    "default": "#ffffff"
+   },
+   {
+    "key": "outline",
+    "label": "Outline",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "outlineColor",
+    "label": "Outline Color",
+    "type": "color",
+    "default": "#000000"
+   },
+   {
+    "key": "opacity",
+    "label": "opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "normal",
+     "additive",
+     "multiply",
+     "screen",
+     "softlight",
+     "difference"
+    ],
+    "default": "normal"
+   },
+   {
+    "key": "repeat",
+    "label": "Repeat",
+    "type": "bool",
+    "default": true
+   }
+  ]
+ },
+ {
+  "id": "color_gradient",
+  "name": "Color Gradient",
+  "category": "Content Layers",
+  "kind": "shader",
+  "shader": "gradient",
+  "randomizable": true,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "colorStops",
+    "label": "colorStops",
+    "type": "color_stops",
+    "default": [
+     {
+      "color": "#d16ba5",
+      "stop": 0.0,
+      "name": "Color 1"
+     },
+     {
+      "color": "#86a8e7",
+      "stop": 0.5,
+      "name": "Color 2"
+     },
+     {
+      "color": "#d16ba5",
+      "stop": 1.0,
+      "name": "Color 3"
+     }
+    ]
+   },
+   {
+    "key": "radial",
+    "label": "radial",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "angle",
+    "label": "angle",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "disable_when": "radial"
+   },
+   {
+    "key": "position",
+    "label": "position",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0.1,
+    "max": 4,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "normal",
+     "additive",
+     "multiply",
+     "screen",
+     "softlight",
+     "difference"
+    ],
+    "default": "screen"
+   }
+  ]
+ },
+ {
+  "id": "audio_visualizer",
+  "name": "Audio Visualizer",
+  "category": "Content Layers",
+  "kind": "shader",
+  "shader": "audio_visualizer",
+  "randomizable": false,
+  "mask": false,
+  "time": false,
+  "params": [
+   {
+    "key": "numBars",
+    "label": "Bar Count",
+    "type": "float",
+    "min": 20,
+    "max": 200,
+    "step": 1,
+    "default": 90,
+    "rand": "full"
+   },
+   {
+    "key": "radial",
+    "label": "Radial",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "mirror",
+    "label": "Mirror",
+    "type": "bool",
+    "default": true
+   },
+   {
+    "key": "color1",
+    "label": "Color 1",
+    "type": "color",
+    "default": "#00ff00"
+   },
+   {
+    "key": "color2",
+    "label": "Color 2",
+    "type": "color",
+    "default": "#ffff00"
+   },
+   {
+    "key": "color3",
+    "label": "Color 3",
+    "type": "color",
+    "default": "#ff0000"
+   },
+   {
+    "key": "edgeDampening",
+    "label": "Edge Damp",
+    "type": "float",
+    "min": 0,
+    "max": 2,
+    "step": 0.1,
+    "default": 0.7,
+    "rand": "full"
+   },
+   {
+    "key": "opacity",
+    "label": "Opacity",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "blendMode",
+    "label": "Blend Mode",
+    "type": "combo",
+    "values": [
+     "normal",
+     "additive",
+     "multiply",
+     "screen",
+     "softlight",
+     "difference"
+    ],
+    "default": "normal"
+   }
+  ]
+ },
+ {
+  "id": "mask",
+  "name": "Mask",
+  "category": "Masking",
+  "kind": "shader",
+  "shader": "mask_mask",
+  "randomizable": false,
+  "mask": true,
+  "time": false,
+  "params": [
+   {
+    "key": "fileName",
+    "label": "File",
+    "type": "info",
+    "default": ""
+   },
+   {
+    "key": "path",
+    "label": "path",
+    "type": "text",
+    "multiline": false,
+    "default": "",
+    "hidden": true
+   },
+   {
+    "key": "load",
+    "label": "Load...",
+    "type": "button"
+   },
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "invert",
+    "label": "Invert",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "showMask",
+    "label": "Show Mask",
+    "type": "bool",
+    "default": false
+   }
+  ]
+ },
+ {
+  "id": "mask_blocks",
+  "name": "Mask Blocks",
+  "category": "Masking",
+  "kind": "shader",
+  "shader": "mask_blocks",
+  "randomizable": false,
+  "mask": true,
+  "time": true,
+  "params": [
+   {
+    "key": "amount",
+    "label": "amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.5,
+    "rand": "full"
+   },
+   {
+    "key": "scale",
+    "label": "scale",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.2,
+    "rand": "full"
+   },
+   {
+    "key": "speed",
+    "label": "speed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0.25,
+    "rand": "full"
+   },
+   {
+    "key": "showMask",
+    "label": "Show Mask",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "seed",
+    "label": "seed",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 0,
+    "rand": "full",
+    "image_only": true
+   }
+  ]
+ },
+ {
+  "id": "mask_draw",
+  "name": "Mask Draw",
+  "category": "Masking",
+  "kind": "custom",
+  "shader": "mask_draw_mask",
+  "randomizable": false,
+  "mask": true,
+  "time": false,
+  "params": [
+   {
+    "key": "amount",
+    "label": "Amount",
+    "type": "float",
+    "min": 0,
+    "max": 1,
+    "step": 0.01,
+    "default": 1,
+    "rand": "full"
+   },
+   {
+    "key": "invert",
+    "label": "Invert",
+    "type": "bool",
+    "default": true
+   },
+   {
+    "key": "showMask",
+    "label": "Show Mask",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "erase",
+    "label": "erase",
+    "type": "bool",
+    "default": false
+   },
+   {
+    "key": "clear",
+    "label": "Clear",
+    "type": "button"
+   }
+  ]
+ },
+ {
+  "id": "chroma_key",
+  "name": "ChromaKey",
+  "category": "Masking",
+  "kind": "shader",
+  "shader": "chroma_key",
+  "randomizable": false,
+  "mask": true,
+  "time": false,
+  "params": [
+   {
+    "key": "chromaCol",
+    "label": "Chroma",
+    "type": "color",
+    "default": "#46ff03"
+   },
+   {
+    "key": "threshold",
+    "label": "threshold",
+    "type": "float",
+    "min": 0.1,
+    "max": 0.6,
+    "step": 0.01,
+    "default": 0.4,
+    "rand": "full"
+   }
+  ]
+ }
+]
