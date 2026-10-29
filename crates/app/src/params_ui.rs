@@ -78,13 +78,21 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                             let open = cx.open_mods.contains(&(uid, key.clone()));
                             let on = e.modulators.get(&key).map(|m| m.enabled).unwrap_or(false);
                             let txt = egui::RichText::new("~").strong().color(if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() });
-                            if ui.add(egui::Button::new(txt).selected(open).small()).on_hover_text("Modulator").clicked() {
+                            let r = ui.add(egui::Button::new(txt).selected(open).small()).on_hover_text("Modulator (right click: copy, paste)");
+                            if r.clicked() {
                                 if open {
                                     cx.open_mods.remove(&(uid, key.clone()));
                                 } else {
                                     cx.open_mods.insert((uid, key.clone()));
                                 }
                             }
+                            r.context_menu(|ui| {
+                                if let Some(c) = modulator_clipboard(ui, e.modulators.get(&key)) {
+                                    let m = e.modulators.entry(key.clone()).or_default();
+                                    *m = Modulator { enabled: m.enabled, ..c };
+                                    changed = true;
+                                }
+                            });
                         }
                         let speed = ((*max - *min) as f64 / 300.0).max(if *step > 0.0 { *step as f64 / 4.0 } else { 0.0 });
                         let mut live_v = match cx.live.and_then(|l| l.get(&key)) {
@@ -277,6 +285,22 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
 }
 
 const SPEEDS: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
+/// Copy and paste a modulator between parameters. Returns the modulator to paste: all its
+/// settings apply, whether it is on stays as it was.
+fn modulator_clipboard(ui: &mut egui::Ui, m: Option<&Modulator>) -> Option<Modulator> {
+    let id = egui::Id::unique("modulator clipboard");
+    if ui.button("Copy modulator").clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(id, m.cloned().unwrap_or_default()));
+        ui.close();
+    }
+    let clip: Option<Modulator> = ui.ctx().data(|d| d.get_temp(id));
+    let paste = ui.add_enabled(clip.is_some(), egui::Button::new("Paste modulator")).clicked();
+    if paste {
+        ui.close();
+    }
+    clip.filter(|_| paste)
+}
 
 /// `learning`: this modulator waits for MIDI (value: lit in this blink phase).
 fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64, custom_bands: usize, learning: Option<bool>, learn_clicked: &mut bool) -> bool {
