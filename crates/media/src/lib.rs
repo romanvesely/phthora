@@ -3,7 +3,8 @@
 //! - [`probe`] / [`count_frames`]: inspect files
 //! - [`load_image`]: still image to RGBA
 //! - [`Decoder`]: streaming frames from video/GIF (preview and export)
-//! - [`Encoder`]: frames to MP4 / WebM / GIF / PNG, optional audio mux
+//! - [`Encoder`]: frames to MP4 / WebM / GIF / WebP / APNG / PNG sequence or one still
+//!   (PNG / JPG / WebP), optional audio mux
 //! - [`LiveSource`] / [`VirtualCam`]: cameras in, virtual camera out (V4L2)
 
 mod audio;
@@ -21,7 +22,7 @@ mod util;
 pub use audio::decode_audio;
 pub use clip::ClipReader;
 pub use decoder::{DecodeOptions, Decoder, Frame};
-pub use encoder::{AudioSource, Backend, EncodeSettings, Encoder, Format, Quality, vaapi_available};
+pub use encoder::{AudioSource, Backend, EncodeSettings, Encoder, Format, Quality, format_available, missing_encoder, vaapi_available};
 pub use error::{MediaError, Result};
 pub use image::{RgbaImage, load_image};
 pub use live::{LiveSource, Record, VideoDevice, VirtualCam, list_devices};

@@ -191,7 +191,103 @@ fn help_lists_the_options() {
     for args in [&["--help"][..], &["render", "--help"], &["render", "-h"]] {
         let out = run(bin().args(args));
         assert!(out.status.success(), "{args:?}");
-        assert!(String::from_utf8_lossy(&out.stdout).contains("--audio FILE|none"), "{args:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("--audio FILE|none"), "{args:?}");
+        for word in [".webp", ".apng", ".jpg", "%05d", "PNG sequence"] {
+            assert!(text.contains(word), "{args:?} does not mention {word}");
+        }
+    }
+}
+
+/// Render a moving 64x36 clip with transparent blocks to `name` and return the ffprobe
+/// fields of its first stream. The input moves: animated WebP merges identical frames.
+fn render_clip(d: &Path, name: &str, extra: &[&str]) -> (PathBuf, String) {
+    let out = d.join(name);
+    let input = make_input(d, false);
+    run(bin().arg("render").arg(&input).args(["--effect", "mask_blocks", "--size", "64x36", "--duration", "0.5", "--fps", "10", "--background", "transparent"]).args(extra).arg("--out").arg(&out));
+    let info = probe(&out, "stream=codec_name,pix_fmt,width,height,nb_read_frames");
+    (out, info)
+}
+
+fn alpha_pix_fmt(info: &str) -> bool {
+    info.lines().find_map(|l| l.strip_prefix("pix_fmt=")).is_some_and(|p| p.contains('a'))
+}
+
+#[test]
+fn animated_formats_by_extension_keep_alpha() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("formats");
+    for (name, codec) in [("a.webp", "webp_anim"), ("a.apng", "apng"), ("a.webm", "vp9")] {
+        let (_, info) = render_clip(&d, name, &[]);
+        // a width of 64 and 5 frames: 0.5 s at 10 fps
+        assert!(info.contains(&format!("codec_name={codec}")) && info.contains("width=64") && info.contains("height=36") && info.contains("nb_read_frames=5"), "{name}: {info}");
+        if name != "a.webm" {
+            assert!(alpha_pix_fmt(&info), "{name} lost its alpha: {info}");
+        }
+    }
+    // GIF keeps transparency too, and takes at most 50 fps
+    let out = d.join("fast.gif");
+    let res = run(bin().arg("render").arg(d.join("in.mp4")).args(["--effect", "mask_blocks", "--size", "64x36", "--duration", "0.5", "--fps", "60", "--background", "transparent", "--out"]).arg(&out));
+    assert!(String::from_utf8_lossy(&res.stderr).contains("at most 50 fps"));
+    let info = probe(&out, "stream=codec_name,nb_read_frames,r_frame_rate");
+    assert!(info.contains("codec_name=gif") && info.contains("nb_read_frames=25") && info.contains("r_frame_rate=50/1"), "{info}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn png_sequence_by_folder_and_pattern() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("seq");
+    let common = ["render", "--effect", "mask_blocks", "--size", "64x36", "--duration", "0.5", "--fps", "10", "--background", "transparent", "--out"];
+    // a trailing slash names a folder
+    let folder = format!("{}/shots/", d.display());
+    run(bin().args(common).arg(&folder));
+    let names = |dir: &Path| {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&d.join("shots")), (1..=5).map(|n| format!("shots-{n:05}.png")).collect::<Vec<_>>());
+    let info = probe(&d.join("shots/shots-00001.png"), "stream=codec_name,pix_fmt,width,height");
+    assert!(info.contains("codec_name=png") && info.contains("width=64") && info.contains("height=36") && alpha_pix_fmt(&info), "{info}");
+    // a %05d name is a pattern
+    run(bin().args(common).arg(d.join("p/f_%05d.png")));
+    assert_eq!(names(&d.join("p")).len(), 5);
+    assert!(d.join("p/f_00005.png").exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn stills_by_extension() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("stills");
+    // without --duration or --fps a .webp is a still: one frame, with alpha
+    let still = d.join("still.webp");
+    run(bin().args(["render", "--effect", "mask_blocks", "--size", "64x36", "--background", "transparent", "--out"]).arg(&still));
+    let info = probe(&still, "stream=codec_name,pix_fmt,width,height,nb_read_frames");
+    assert!(info.contains("codec_name=webp\n") && info.contains("nb_read_frames=1") && alpha_pix_fmt(&info), "{info}");
+    let jpg = d.join("still.jpg");
+    run(bin().args(["render", "--effect", "color_gradient", "--size", "64x36", "--quality", "low", "--out"]).arg(&jpg));
+    let info = probe(&jpg, "stream=codec_name,width,height,nb_read_frames");
+    assert!(info.contains("codec_name=mjpeg") && info.contains("width=64") && info.contains("height=36") && info.contains("nb_read_frames=1"), "{info}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn unknown_output_names_are_rejected() {
+    for name in ["x.txt", "x", "frame-%05d.jpg"] {
+        let out = bin().args(["render", "--effect", "pixelate", "--out", name]).output().unwrap();
+        assert!(!out.status.success(), "{name} was accepted");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("output must end in"), "{name}");
     }
 }
 
