@@ -61,6 +61,8 @@ pub struct Settings {
     pub flip_webcam: bool,
     /// send the preview to this v4l2loopback device
     pub virtual_cam: Option<PathBuf>,
+    /// preset folder chosen last (None: all presets)
+    pub preset_folder: Option<String>,
 }
 
 impl Default for Settings {
@@ -79,6 +81,7 @@ impl Default for Settings {
             camera: None,
             flip_webcam: true,
             virtual_cam: None,
+            preset_folder: None,
         }
     }
 }

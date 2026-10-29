@@ -193,6 +193,8 @@ impl PhthoraApp {
         let rs = cc.wgpu_render_state.clone().expect("wgpu renderer");
         let ctx = GpuContext::from_parts(rs.device.clone(), rs.queue.clone());
         let settings = Settings::load();
+        // a remembered folder that was deleted meanwhile means all presets
+        let preset_folder = settings.preset_folder.clone().filter(|f| store::preset_dir().join(f).is_dir());
         let mut engine = Engine::new(&ctx, DEFAULT_SIZE.0, DEFAULT_SIZE.1);
         crate::video::install(&mut engine.assets, true);
         engine.background = settings.background;
@@ -254,7 +256,7 @@ impl PhthoraApp {
             user_fonts: phthora_gpu::assets::list_fonts(&store::fonts_dir()),
             dialog: None,
             quit_ok: false,
-            preset_folder: None,
+            preset_folder,
             status: String::new(),
             status_time: None,
             renaming: None,
@@ -543,6 +545,12 @@ impl PhthoraApp {
         if !missing.is_empty() {
             self.error("Missing files", format!("The preset uses files that do not exist:\n{}", missing.join("\n")));
         }
+    }
+
+    fn set_preset_folder(&mut self, folder: Option<String>) {
+        self.preset_folder = folder.clone();
+        self.settings.preset_folder = folder;
+        self.settings.save();
     }
 
     /// Indices of the presets in the current folder.
@@ -1226,7 +1234,7 @@ impl PhthoraApp {
                         }
                     });
                     if f != self.preset_folder {
-                        self.preset_folder = f;
+                        self.set_preset_folder(f);
                     }
                 });
             });
@@ -2078,7 +2086,7 @@ impl PhthoraApp {
             } else if let Err(e) = std::fs::create_dir_all(store::preset_dir().join(&name)) {
                 self.error("Cannot create the folder", e.to_string());
             } else {
-                self.preset_folder = Some(name);
+                self.set_preset_folder(Some(name));
             }
         }
     }
