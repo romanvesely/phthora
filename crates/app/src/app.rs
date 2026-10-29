@@ -3,6 +3,7 @@
 use crate::audio_ui::{AudioState, Src};
 use phthora_audio::{MidiIn, MidiValues};
 use phthora_gpu::paint::{self, PaintCanvas, PaintKind};
+use phthora_core::orbit::{self, Orbit};
 use crate::params_ui::{self, Action, ParamCtx};
 use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
@@ -201,6 +202,55 @@ impl PhthoraApp {
             }
         }
         self.engine.paint.retain(|u, _| alive.contains(u));
+        // turning mouse control off resets the camera
+        for e in &mut self.chain.effects {
+            if e.data.contains_key(orbit::DATA_KEY) && !e.get("mouseControls").is_some_and(|v| v.as_bool()) {
+                e.data.remove(orbit::DATA_KEY);
+            }
+        }
+    }
+
+    /// 3D effects whose camera follows the mouse.
+    fn orbit_targets(&self) -> Vec<u64> {
+        self.chain.effects.iter().filter(|e| e.enabled && e.get("mouseControls").is_some_and(|v| v.as_bool())).map(|e| e.uid).collect()
+    }
+
+    /// Mouse camera on the preview: drag turns, right drag (or Shift+drag) pans, wheel zooms.
+    fn orbit_input(&mut self, ui: &egui::Ui, resp: &egui::Response, rect: Rect, targets: &[u64]) {
+        let d = resp.drag_delta();
+        let shift = ui.input(|i| i.modifiers.shift);
+        let pan = resp.dragged_by(egui::PointerButton::Secondary) || (shift && resp.dragged_by(egui::PointerButton::Primary));
+        let turn = !pan && resp.dragged_by(egui::PointerButton::Primary);
+        // wheel notches (a notch is a line, about 40 points of touchpad scrolling): 5 % each
+        let wheel = if resp.hovered() {
+            ui.input(|i| {
+                i.events
+                    .iter()
+                    .map(|ev| match ev {
+                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. } => delta.y,
+                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, .. } => delta.y / 40.0,
+                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Page, delta, .. } => delta.y * 10.0,
+                        _ => 0.0,
+                    })
+                    .sum::<f32>()
+            })
+        } else {
+            0.0
+        };
+        if d == Vec2::ZERO && wheel == 0.0 {
+            return;
+        }
+        for uid in targets {
+            let Some(e) = self.chain.get_mut(*uid) else { continue };
+            let mut o = e.data.get(orbit::DATA_KEY).and_then(|s| Orbit::parse(s)).unwrap_or_default();
+            if turn {
+                o.rotate(d.x, d.y, rect.height());
+            } else if pan {
+                o.pan(d.x, d.y, rect.height());
+            }
+            o.zoom(wheel);
+            e.data.insert(orbit::DATA_KEY.into(), o.to_data());
+        }
     }
 
     /// Brush input on the preview at `rect` (the displayed output).
@@ -910,12 +960,22 @@ impl PhthoraApp {
         let scale = (avail.width() / w as f32).min(avail.height() / h as f32);
         let size = Vec2::new(w as f32 * scale, h as f32 * scale);
         let rect = Rect::from_center_size(avail.center(), size);
-        let drawing = self.active_draw().is_some();
-        let resp = ui.allocate_rect(avail, if drawing { Sense::drag() } else { Sense::hover() });
-        if drawing && resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        let orbits = self.orbit_targets();
+        let drawing = orbits.is_empty() && self.active_draw().is_some();
+        let resp = ui.allocate_rect(avail, if drawing || !orbits.is_empty() { Sense::drag() } else { Sense::hover() });
+        if !orbits.is_empty() {
+            // the 3D camera takes the mouse while its "Mouse Controls" is on
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
+            self.orbit_input(ui, &resp, rect, &orbits);
+            self.end_stroke();
+        } else {
+            if drawing && resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+            self.draw_input(ui, &resp, rect);
         }
-        self.draw_input(ui, &resp, rect);
         let painter = ui.painter_at(avail);
         // checkerboard for transparency
         let cell = 12.0;
