@@ -166,6 +166,10 @@ pub struct PhthoraApp {
     audio: AudioState,
     settings: Settings,
     show_settings: bool,
+    /// the settings window as last drawn: it closes by ✕, Esc or Ctrl+, and saves on all three
+    settings_shown: bool,
+    /// the input is a webcam recording, shown with the webcam's flip until another input loads
+    recording_flip: bool,
     show_about: bool,
     /// preview in a window of its own (second screen, projector)
     popout: bool,
@@ -252,6 +256,8 @@ impl PhthoraApp {
             audio: AudioState::new(settings.audio.clone()),
             settings,
             show_settings: false,
+            settings_shown: false,
+            recording_flip: false,
             show_about: false,
             popout: false,
             popout_on_top: false,
@@ -436,6 +442,9 @@ impl PhthoraApp {
                 return;
             }
         };
+        if std::mem::take(&mut self.recording_flip) {
+            self.engine.flip_x = self.settings.flip_x;
+        }
         // locked export settings keep the size, length and frame rate of the last input
         let locked = self.export.lock;
         let (w, h) = if locked { self.out_size } else { phthora_media::fit_size(info.width, info.height, MAX_DIM) };
@@ -990,6 +999,7 @@ impl PhthoraApp {
                 self.input_info = None;
                 self.timing.mode = OutputMode::Video;
                 self.engine.flip_x = self.settings.flip_webcam;
+                self.recording_flip = false;
                 self.engine.reset_history();
                 self.preview.invalidate();
                 self.rec_started = record.is_some().then(Instant::now);
@@ -1033,6 +1043,7 @@ impl PhthoraApp {
                 self.load_input(&path);
                 // the recording shows the camera as it was seen
                 self.engine.flip_x = self.settings.flip_webcam;
+                self.recording_flip = true;
                 if self.audio.src == Src::Mic {
                     self.audio.src = Src::Input;
                 }
@@ -1440,29 +1451,6 @@ impl PhthoraApp {
                         if ui.small_button(arrow).clicked() {
                             e.expanded = !e.expanded;
                         }
-                        match &mut self.renaming {
-                            Some((ruid, buf)) if *ruid == uid => {
-                                let r = ui.add(egui::TextEdit::singleline(buf).desired_width(110.0));
-                                if r.lost_focus() {
-                                    let s = buf.trim().to_string();
-                                    e.display_name = if s.is_empty() || s == e.desc.name { None } else { Some(s) };
-                                    self.renaming = None;
-                                } else {
-                                    r.request_focus();
-                                }
-                            }
-                            _ => {
-                                let name = egui::RichText::new(e.name().to_string()).strong();
-                                let r = ui.add(egui::Label::new(name).sense(Sense::click())).on_hover_text("Double click to rename, right click for groups");
-                                if r.double_clicked() {
-                                    self.renaming = Some((uid, e.name().to_string()));
-                                }
-                                if r.clicked() {
-                                    e.expanded = !e.expanded;
-                                }
-                                r.context_menu(|ui| group_menu(ui, &mut moved_into, &mut group_op));
-                            }
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add_enabled(!locked, egui::Button::new("✕").small()).on_hover_text("Remove").on_disabled_hover_text("Locked").clicked() {
                                 remove = Some(uid);
@@ -1493,6 +1481,32 @@ impl PhthoraApp {
                             if i > 0 && ui.small_button("⏶").clicked() {
                                 moved = Some((i, i - 1));
                             }
+                            // the name fills what the buttons leave and is cut short there
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                match &mut self.renaming {
+                                    Some((ruid, buf)) if *ruid == uid => {
+                                        let r = ui.add(egui::TextEdit::singleline(buf).desired_width(ui.available_width()));
+                                        if r.lost_focus() {
+                                            let s = buf.trim().to_string();
+                                            e.display_name = if s.is_empty() || s == e.desc.name { None } else { Some(s) };
+                                            self.renaming = None;
+                                        } else {
+                                            r.request_focus();
+                                        }
+                                    }
+                                    _ => {
+                                        let name = egui::RichText::new(e.name().to_string()).strong();
+                                        let r = ui.add(egui::Label::new(name).truncate().sense(Sense::click())).on_hover_text(format!("{}\nDouble click to rename, right click for groups", e.name()));
+                                        if r.double_clicked() {
+                                            self.renaming = Some((uid, e.name().to_string()));
+                                        }
+                                        if r.clicked() {
+                                            e.expanded = !e.expanded;
+                                        }
+                                        r.context_menu(|ui| group_menu(ui, &mut moved_into, &mut group_op));
+                                    }
+                                }
+                            });
                         });
                     });
                     if e.expanded {
@@ -1563,28 +1577,6 @@ impl PhthoraApp {
                     if ui.small_button(if g.expanded { "▼" } else { "▶" }).clicked() {
                         g.expanded = !g.expanded;
                     }
-                    match renaming {
-                        Some((ruid, buf)) if *ruid == gid => {
-                            let r = ui.add(egui::TextEdit::singleline(buf).desired_width(110.0));
-                            if r.lost_focus() {
-                                let s = buf.trim().to_string();
-                                if !s.is_empty() {
-                                    g.name = s;
-                                }
-                                *renaming = None;
-                            } else {
-                                r.request_focus();
-                            }
-                        }
-                        _ => {
-                            let r = ui.add(egui::Label::new(egui::RichText::new(&g.name).strong()).sense(Sense::click())).on_hover_text("Double click to rename");
-                            if r.double_clicked() {
-                                *renaming = Some((gid, g.name.clone()));
-                            } else if r.clicked() {
-                                g.expanded = !g.expanded;
-                            }
-                        }
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_enabled(!g.locked, egui::Button::new("✕").small()).on_hover_text("Remove the group and its effects").on_disabled_hover_text("Locked").clicked() {
                             op = Some(GroupOp::Remove(gid));
@@ -1605,6 +1597,31 @@ impl PhthoraApp {
                         if !first && ui.small_button("⏶").clicked() {
                             op = Some(GroupOp::Move(gid, true));
                         }
+                        // the name fills what the buttons leave and is cut short there
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            match renaming {
+                                Some((ruid, buf)) if *ruid == gid => {
+                                    let r = ui.add(egui::TextEdit::singleline(buf).desired_width(ui.available_width()));
+                                    if r.lost_focus() {
+                                        let s = buf.trim().to_string();
+                                        if !s.is_empty() {
+                                            g.name = s;
+                                        }
+                                        *renaming = None;
+                                    } else {
+                                        r.request_focus();
+                                    }
+                                }
+                                _ => {
+                                    let r = ui.add(egui::Label::new(egui::RichText::new(&g.name).strong()).truncate().sense(Sense::click())).on_hover_text(format!("{}\nDouble click to rename", g.name));
+                                    if r.double_clicked() {
+                                        *renaming = Some((gid, g.name.clone()));
+                                    } else if r.clicked() {
+                                        g.expanded = !g.expanded;
+                                    }
+                                }
+                            }
+                        });
                     });
                 });
                 ui.horizontal(|ui| {
@@ -1875,21 +1892,28 @@ impl PhthoraApp {
                 ui.end_row();
             });
         });
-        if open && !self.show_settings || self.devices.is_empty() && open {
+        if open && !self.settings_shown || self.devices.is_empty() && open {
             self.devices = phthora_media::list_devices();
         }
-        if open != self.show_settings || !open {
-            self.settings.background = self.engine.background;
-            if matches!(self.source, Source::Live(_)) {
-                self.settings.flip_webcam = self.engine.flip_x;
-            } else {
-                self.settings.flip_x = self.engine.flip_x;
-            }
-            if self.show_settings && !open {
+        if open || self.settings_shown {
+            self.store_view_settings();
+            if !open {
                 self.settings.save();
             }
         }
         self.show_settings = open;
+        self.settings_shown = open;
+    }
+
+    /// Background and flip from the engine into the settings. The flip checkbox stands for the
+    /// webcam's flip while the webcam or a recording of it is shown, else for files.
+    fn store_view_settings(&mut self) {
+        self.settings.background = self.engine.background;
+        if matches!(self.source, Source::Live(_)) || self.recording_flip {
+            self.settings.flip_webcam = self.engine.flip_x;
+        } else {
+            self.settings.flip_x = self.engine.flip_x;
+        }
     }
 
     fn export_window(&mut self, ctx: &egui::Context) {
@@ -2409,12 +2433,7 @@ impl eframe::App for PhthoraApp {
     fn on_exit(&mut self) {
         self.audio.stop();
         self.settings.audio = self.audio.settings.clone();
-        self.settings.background = self.engine.background;
-        if matches!(self.source, Source::Live(_)) {
-            self.settings.flip_webcam = self.engine.flip_x;
-        } else {
-            self.settings.flip_x = self.engine.flip_x;
-        }
+        self.store_view_settings();
         self.settings.save();
     }
 }
