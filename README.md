@@ -65,6 +65,10 @@ export looks exactly like the preview.
 - **Preview equals export**: the preview renders each output frame once, through the
   same pipeline as the export, so time-based effects look the same in both. A preset
   with fixed seeds on the same input renders the same frames every time.
+- **Batch export**: render a list of images and videos with the same effects into one
+  folder (☰ → Batch export…, or several inputs on the command line). Size, length, frame
+  rate and format follow each input or are set for all; nothing is overwritten, and a
+  file that fails does not stop the others.
 - **Command line**: render without opening a window, for scripts and batch jobs.
 
 ### Effects
@@ -134,7 +138,8 @@ as a preset.
 
 Double-click a slider to reset it, double-click an effect or group name to rename it.
 The mouse wheel over a slider moves it one step. The ☰ menu loads all effects, disables
-or removes them, opens the preset, output, fonts and log folders and shows the version.
+or removes them, opens batch export, the preset, output, fonts and log folders and shows
+the version.
 Keyframe curves: click adds a point, drag moves it (Shift snaps), double or right click
 deletes it; the background shows the loudness of the audio track.
 
@@ -142,6 +147,7 @@ deletes it; the background shows the loudness of the audio track.
 
 ```sh
 phthora render [INPUT] [options]
+phthora render INPUT... --out-dir DIR [options]
 
   --preset FILE        effect chain (.phthora.json)
   --effect ID,...      add effects with default settings (see --list)
@@ -169,11 +175,19 @@ phthora render [INPUT] [options]
   --backend B          auto | software | vaapi (MP4 encoder)
   --list               list effect ids
 
+batch (several inputs, or --out-dir with one):
+  --out-dir DIR        folder for the results, instead of --out; every input is written as
+                       <name>-phthora-<date>-<time>.<ext>, no existing file is overwritten
+  --format EXT         one format for all: mp4 webm gif webp apng png jpg seq (PNG sequence)
+                       (default: the input's own container where possible, else mp4 / png)
+
 phthora --version      print the version
 
 WebM, GIF, WebP, APNG, PNG and PNG sequences keep transparency with
 --background transparent. The input's own audio is kept at normal speed and direction
 (trimmed with the input). MIDI modulators keep their slider value on the command line.
+In a batch, size, length and frame rate come from each input unless --size, --duration
+or --fps are given; failed inputs are listed at the end and the exit status is 1.
 ```
 
 Examples:
@@ -186,6 +200,7 @@ phthora render --effect color_gradient,kaleido --size 1080x1080 --duration 8 --o
 phthora render clip.mp4 --trim 2 6 --pingpong --preset mine.phthora.json --out bounce.mp4
 phthora render --effect audio_visualizer --audio song.mp3 --size 1280x720 --out bars.mp4
 phthora render clip.mp4 --preset mine.phthora.json --background transparent --out frames/
+phthora render *.mp4 *.jpg --preset mine.phthora.json --out-dir done/
 ```
 
 ## Files
@@ -217,10 +232,6 @@ cargo test --workspace
 | `crates/app` | the editor (eframe/egui) and the command line |
 
 Shaders live in `shaders/` as WGSL, one file per pass.
-
-## Not yet included
-
-Batch export of several inputs is planned for a later version.
 
 ## License
 
