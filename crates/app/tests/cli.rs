@@ -110,3 +110,78 @@ fn video_export_from_preset_is_deterministic() {
     assert!(fa == fb, "two renders of the same preset differ");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+fn make_input(d: &Path, audio: bool) -> PathBuf {
+    let input = d.join("in.mp4");
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=96x54:rate=10:duration=2"]);
+    if audio {
+        cmd.args(["-f", "lavfi", "-i", "sine=d=2", "-c:a", "aac", "-shortest"]);
+    }
+    assert!(cmd.args(["-pix_fmt", "yuv420p"]).arg(&input).status().unwrap().success());
+    input
+}
+
+fn streams(path: &Path) -> String {
+    let out = Command::new("ffprobe").args(["-v", "error", "-show_entries", "stream=codec_type,pix_fmt", "-of", "default=nw=1"]).arg(path).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn trim_speed_and_direction_set_the_length() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("trim");
+    let input = make_input(&d, true);
+    let frames = |extra: &[&str], name: &str| {
+        let out = d.join(name);
+        run(bin().arg("render").arg(&input).args(extra).args(["--quality", "low", "--backend", "software", "--out"]).arg(&out));
+        (probe(&out, "stream=nb_read_frames"), streams(&out))
+    };
+    // 0.5 s of input at 10 fps
+    let (f, s) = frames(&["--trim", "0.5", "1.0"], "trim.mp4");
+    assert!(f.contains("nb_read_frames=5"), "{f}");
+    assert!(s.contains("codec_type=audio"), "trimmed input keeps its audio: {s}");
+    // ping-pong: 2 * 20 - 2 frames
+    let (f, s) = frames(&["--pingpong"], "pp.mp4");
+    assert!(f.contains("nb_read_frames=38"), "{f}");
+    assert!(!s.contains("codec_type=audio"), "re-timed input drops its audio: {s}");
+    // double speed: half the length
+    let (f, _) = frames(&["--speed", "2"], "fast.mp4");
+    assert!(f.contains("nb_read_frames=10"), "{f}");
+    let (_, s) = frames(&["--audio", "none"], "silent.mp4");
+    assert!(!s.contains("codec_type=audio"), "{s}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn transparent_background_keeps_alpha() {
+    if !have("ffmpeg") || !have("ffprobe") {
+        eprintln!("skipped: ffmpeg/ffprobe not found");
+        return;
+    }
+    let d = tmp_dir("alpha");
+    let out = d.join("a.webm");
+    run(bin().args(["render", "--effect", "mask_blocks", "--size", "64x36", "--duration", "0.5", "--background", "transparent", "--out"]).arg(&out));
+    // VP9 alpha is stored as side data; the stream tag says so
+    let tags = Command::new("ffprobe").args(["-v", "error", "-show_entries", "stream_tags=alpha_mode", "-of", "default=nw=1"]).arg(&out).output().unwrap();
+    assert!(String::from_utf8_lossy(&tags.stdout).contains("alpha_mode=1"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn bad_options_are_rejected() {
+    for args in [
+        &["--speed", "9"][..],
+        &["--fps", "0"],
+        &["--size", "8x8"],
+        &["--background", "#12"],
+        &["--backend", "magic"],
+        &["--duration", "-1"],
+    ] {
+        let out = bin().arg("render").args(args).args(["--out", "x.mp4"]).output().unwrap();
+        assert!(!out.status.success(), "{args:?} was accepted");
+    }
+}

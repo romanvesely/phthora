@@ -1,18 +1,19 @@
 //! Main window.
 
 use crate::params_ui::{self, Action, ParamCtx};
+use crate::pipeline::{InputVideo, Preview, Step};
 use crate::render::{self, ExportJob, Progress};
 use crate::store::{self, Settings};
-use crate::video::ClipSource;
 use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, Pos2, Rect, Sense, Vec2};
 use eframe::egui_wgpu;
 use phthora_core::clock::BpmTap;
+use phthora_core::history::History;
 use phthora_core::modulator::LiveInputs;
 use phthora_core::params::Value;
 use phthora_core::registry::{self, categories};
-use phthora_core::{Chain, FrameTime, OutputMode, ResolvedEffect, TimingSettings};
+use phthora_core::{Chain, FrameTime, OutputMode, Playback, ResolvedEffect, TimingSettings};
 use phthora_gpu::{Engine, GpuContext, Target};
-use phthora_media::{AudioSource, Format, MediaInfo, MediaKind, Quality};
+use phthora_media::{AudioSource, Backend, Format, MediaInfo, MediaKind, Quality};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -24,7 +25,7 @@ const DEFAULT_SIZE: (u32, u32) = (1280, 720);
 enum Source {
     None,
     Still,
-    Video { clip: ClipSource, last: Option<u64> },
+    Video(InputVideo),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -34,13 +35,16 @@ enum AudioChoice {
     File,
 }
 
+/// A running export: worker thread, progress, start time.
+type RunningExport = (std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant);
+
 struct ExportUi {
     open: bool,
     format: Format,
     quality: Quality,
     audio: AudioChoice,
     audio_file: Option<PathBuf>,
-    running: Option<(std::thread::JoinHandle<Result<PathBuf, String>>, Progress, Instant)>,
+    running: Option<RunningExport>,
 }
 
 pub struct PhthoraApp {
@@ -48,6 +52,11 @@ pub struct PhthoraApp {
     render_state: egui_wgpu::RenderState,
     display: Option<(Target, egui::TextureId)>,
     chain: Chain,
+    history: History,
+    preview: Preview,
+    playback: Playback,
+    /// VAAPI H.264 works here (checked in the background at start)
+    vaapi: std::sync::Arc<std::sync::atomic::AtomicBool>,
     timing: TimingSettings,
     bpm: f64,
     use_bpm: bool,
@@ -74,6 +83,8 @@ pub struct PhthoraApp {
     add_filter: String,
     live: HashMap<u64, BTreeMap<String, Value>>,
     last_ft: FrameTime,
+    /// the preview waits for the decoder: repaint soon
+    waiting: bool,
 }
 
 impl PhthoraApp {
@@ -82,7 +93,7 @@ impl PhthoraApp {
         let ctx = GpuContext::from_parts(rs.device.clone(), rs.queue.clone());
         let settings = Settings::load();
         let mut engine = Engine::new(&ctx, DEFAULT_SIZE.0, DEFAULT_SIZE.1);
-        crate::video::install(&mut engine.assets);
+        crate::video::install(&mut engine.assets, true);
         engine.background = settings.background;
         engine.flip_x = settings.flip_x;
         let mut visuals = egui::Visuals::dark();
@@ -96,6 +107,10 @@ impl PhthoraApp {
             render_state: rs,
             display: None,
             chain: Chain::default(),
+            history: History::default(),
+            preview: Preview::default(),
+            playback: Playback::default(),
+            vaapi: Default::default(),
             timing: TimingSettings::default(),
             bpm: 120.0,
             use_bpm: false,
@@ -122,10 +137,13 @@ impl PhthoraApp {
             add_filter: String::new(),
             live: HashMap::new(),
             last_ft: FrameTime::default(),
+            waiting: false,
         };
         if let Some(p) = initial {
             app.load_input(&p);
         }
+        let flag = app.vaapi.clone();
+        std::thread::spawn(move || flag.store(phthora_media::vaapi_available(), Ordering::Relaxed));
         app
     }
 
@@ -160,23 +178,17 @@ impl PhthoraApp {
                 }
             }
         } else {
-            match ClipSource::with_size(path, info.clone(), w, h) {
-                Some(clip) => {
-                    self.source = Source::Video { clip, last: None };
-                    self.timing.mode = OutputMode::Video;
-                    self.timing.duration = info.duration.clamp(0.5, 3600.0);
-                    if info.fps > 0.0 {
-                        self.timing.fps = info.fps.round().clamp(1.0, 120.0);
-                    }
-                    if self.export.format == Format::Png {
-                        self.export.format = Format::Mp4;
-                    }
-                }
-                None => {
-                    self.notify("Cannot decode video");
-                    return;
-                }
+            self.playback = Playback { speed: self.playback.speed, direction: self.playback.direction, ..Default::default() };
+            let v = InputVideo::open(path, &info, (w, h), self.playback);
+            self.timing.mode = OutputMode::Video;
+            self.timing.duration = v.playback.natural_duration(v.clip()).clamp(0.05, 3600.0);
+            if info.fps > 0.0 {
+                self.timing.fps = info.fps.round().clamp(1.0, 120.0);
             }
+            if self.export.format == Format::Png {
+                self.export.format = Format::Mp4;
+            }
+            self.source = Source::Video(v);
         }
         self.settings.input_dir = path.parent().map(|p| p.to_path_buf());
         self.settings.save();
@@ -187,6 +199,7 @@ impl PhthoraApp {
         self.input_path = Some(path.to_path_buf());
         self.play_time = 0.0;
         self.engine.reset_history();
+        self.preview.invalidate();
         self.notify(format!("Loaded {}", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
     }
 
@@ -194,12 +207,17 @@ impl PhthoraApp {
         let (w, h) = (w.clamp(16, MAX_DIM) & !1, h.clamp(16, MAX_DIM) & !1);
         self.out_size = (w, h);
         self.engine.set_size(w, h);
-        if let Source::Video { clip, last } = &mut self.source
-            && let Some(path) = self.input_path.clone()
-                && let Some(c) = ClipSource::with_size(&path, clip.info().clone(), w, h) {
-                    *clip = c;
-                    *last = None;
-                }
+        self.reopen_video();
+    }
+
+    /// Restart the input video with the current size and playback settings.
+    fn reopen_video(&mut self) {
+        if let Source::Video(v) = &mut self.source
+            && let Some(path) = self.input_path.clone() {
+                let info = v.reader.info().clone();
+                *v = InputVideo::open(&path, &info, self.out_size, self.playback);
+            }
+        self.preview.invalidate();
     }
 
     fn pick_input(&mut self) {
@@ -225,6 +243,7 @@ impl PhthoraApp {
         match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| phthora_core::preset::from_json(&s).map_err(|e| e.to_string())) {
             Ok((effects, warnings)) => {
                 self.chain.replace(effects, true);
+                self.history.observe(&self.chain.effects);
                 self.preset_idx = Some(idx);
                 self.preset_name = store::preset_label(&path);
                 self.engine.reset_history();
@@ -304,6 +323,11 @@ impl PhthoraApp {
 
     // ------------------------------------------------------------ export
 
+    /// The input has audio that still lines up with the picture (not reversed or re-timed).
+    fn input_audio_usable(&self) -> bool {
+        self.input_info.as_ref().is_some_and(|i| i.has_audio) && self.playback.speed == 1.0 && self.playback.direction == phthora_core::Direction::Forward
+    }
+
     fn start_export(&mut self) {
         if self.export.running.is_some() {
             return;
@@ -316,8 +340,8 @@ impl PhthoraApp {
         self.settings.quality = quality_name(self.export.quality).into();
         self.settings.save();
         let audio = match self.export.audio {
-            AudioChoice::Input if self.input_info.as_ref().map(|i| i.has_audio).unwrap_or(false) => {
-                self.input_path.clone().map(|p| AudioSource { path: p, start: 0.0, end: None })
+            AudioChoice::Input if self.input_audio_usable() => {
+                self.input_path.clone().map(|p| AudioSource { path: p, start: self.playback.trim_start, end: self.playback.trim_end })
             }
             AudioChoice::File => self.export.audio_file.clone().map(|p| AudioSource { path: p, start: 0.0, end: None }),
             _ => None,
@@ -326,6 +350,7 @@ impl PhthoraApp {
         timing.bpm = self.use_bpm.then_some(self.bpm);
         let job = ExportJob {
             input: self.input_path.clone(),
+            playback: self.playback,
             effects: self.chain.effects.clone(),
             timing,
             width: self.out_size.0,
@@ -334,6 +359,7 @@ impl PhthoraApp {
             flip_x: self.engine.flip_x,
             format: fmt,
             quality: self.export.quality,
+            backend: if self.settings.hw_encode && self.vaapi.load(Ordering::Relaxed) { Backend::Vaapi } else { Backend::Software },
             audio,
             out,
         };
@@ -359,12 +385,18 @@ impl PhthoraApp {
 
     // ------------------------------------------------------------ frame
 
-    fn frame_time(&self) -> FrameTime {
+    fn timing_now(&self) -> TimingSettings {
         let mut t = self.timing;
         t.bpm = self.use_bpm.then_some(self.bpm);
+        t
+    }
+
+    /// Output frame index at the playback position.
+    fn frame_index(&self) -> u64 {
+        let t = self.timing_now();
         match t.mode {
-            OutputMode::Image => t.at_frame(0),
-            OutputMode::Video => t.at_seconds(self.play_time),
+            OutputMode::Image => 0,
+            OutputMode::Video => ((self.play_time * t.fps + 1e-6).floor() as u64) % t.frame_count(),
         }
     }
 
@@ -378,24 +410,24 @@ impl PhthoraApp {
                 }
             }
         self.last_tick = Some(now);
-        // source frame
-        if let Source::Video { clip, last } = &mut self.source {
-            use phthora_gpu::assets::VideoSource;
-            let t = if self.timing.mode == OutputMode::Image { 0.0 } else { self.play_time };
-            let (w, h) = clip.size();
-            if let Some((idx, data)) = clip.frame_at(t)
-                && *last != Some(idx) {
-                    self.engine.set_source_rgba(w, h, data);
-                    *last = Some(idx);
-                }
-        }
-        let ft = self.frame_time();
+        let alive: HashSet<u64> = self.chain.effects.iter().map(|e| e.uid).collect();
+        self.engine.retain(|u| alive.contains(&u));
+        let timing = self.timing_now();
+        let n = self.frame_index();
+        let ft = timing.at_frame(n);
         self.last_ft = ft;
         let live = LiveInputs::default();
         let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &HashMap::new());
         self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
-        self.engine.render(&resolved, &ft);
-        self.update_display();
+        let video = match &self.source {
+            Source::Video(v) => Some(v),
+            _ => None,
+        };
+        match self.preview.step(&mut self.engine, video, n, &timing, resolved) {
+            Step::Rendered => self.update_display(),
+            Step::Waiting => self.waiting = true,
+            Step::Unchanged => {}
+        }
     }
 
     fn update_display(&mut self) {
@@ -442,8 +474,11 @@ impl PhthoraApp {
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::M))) {
             self.chaos();
         }
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))) {
+            self.redo();
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::Z))) {
-            self.chain.undo();
+            self.undo();
         }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::D))) {
             self.chain.disable_all();
@@ -473,8 +508,22 @@ impl PhthoraApp {
     }
 
     fn chaos(&mut self) {
+        self.history.observe(&self.chain.effects);
         self.chain.chaos();
+        self.history.observe(&self.chain.effects);
         self.engine.reset_history();
+    }
+
+    fn undo(&mut self) {
+        if let Some(v) = self.history.undo(&self.chain.effects) {
+            self.chain.effects = v;
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(v) = self.history.redo(&self.chain.effects) {
+            self.chain.effects = v;
+        }
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -490,6 +539,7 @@ impl PhthoraApp {
                 self.timing.mode = mode;
                 self.export.format = if mode == OutputMode::Image { Format::Png } else if self.export.format == Format::Png { Format::Mp4 } else { self.export.format };
                 self.engine.reset_history();
+                self.preview.invalidate();
             }
             ui.separator();
             if self.timing.mode == OutputMode::Video {
@@ -508,8 +558,11 @@ impl PhthoraApp {
             if ui.button("Chaos").on_hover_text("Random effects (Ctrl+M)").clicked() {
                 self.chaos();
             }
-            if ui.add_enabled(self.chain.can_undo(), egui::Button::new("Undo")).on_hover_text("Undo chaos (Ctrl+Z)").clicked() {
-                self.chain.undo();
+            if ui.add_enabled(self.history.can_undo(), egui::Button::new("Undo")).on_hover_text("Ctrl+Z").clicked() {
+                self.undo();
+            }
+            if ui.add_enabled(self.history.can_redo(), egui::Button::new("Redo")).on_hover_text("Ctrl+Shift+Z").clicked() {
+                self.redo();
             }
             if ui.button("Shuffle").on_hover_text("Shuffle effect order (Ctrl+E)").clicked() {
                 self.chain.shuffle();
@@ -794,6 +847,48 @@ impl PhthoraApp {
                 ui.label("Mirror input");
                 ui.checkbox(&mut self.engine.flip_x, "flip horizontally");
                 ui.end_row();
+                if let Source::Video(v) = &self.source {
+                    let clip = v.clip();
+                    let len = clip.duration();
+                    let mut pb = self.playback;
+                    ui.label("Trim input");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut pb.trim_start).range(0.0..=len).speed(0.02).max_decimals(2).suffix(" s"));
+                        ui.label("to");
+                        let mut end = pb.trim_end.unwrap_or(len);
+                        if ui.add(egui::DragValue::new(&mut end).range(0.0..=len).speed(0.02).max_decimals(2).suffix(" s")).changed() {
+                            pb.trim_end = (end < len - 0.5 / clip.fps).then_some(end);
+                        }
+                        if (pb.trim_start > 0.0 || pb.trim_end.is_some()) && ui.small_button("full").clicked() {
+                            pb.trim_start = 0.0;
+                            pb.trim_end = None;
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Input speed");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut pb.speed).range(Playback::MIN_SPEED..=Playback::MAX_SPEED).speed(0.01).max_decimals(2).suffix("×"));
+                        for d in phthora_core::Direction::ALL {
+                            ui.selectable_value(&mut pb.direction, d, d.label());
+                        }
+                    });
+                    ui.end_row();
+                    if pb != self.playback {
+                        self.playback = pb;
+                        self.timing.duration = pb.natural_duration(clip).clamp(0.05, 3600.0);
+                        self.play_time = self.play_time.min(self.timing.duration);
+                        // the reader does not depend on the playback settings: keep its cache
+                        if let Source::Video(v) = &mut self.source {
+                            v.playback = pb;
+                        }
+                        self.preview.invalidate();
+                    }
+                }
+                ui.label("Encoding");
+                let hw = self.vaapi.load(Ordering::Relaxed);
+                ui.add_enabled(hw, egui::Checkbox::new(&mut self.settings.hw_encode, "use the GPU for MP4 (VAAPI)"))
+                    .on_disabled_hover_text("No VAAPI H.264 encoder found");
+                ui.end_row();
                 ui.label("Presets");
                 if ui.button("Open preset folder").clicked() {
                     let _ = std::process::Command::new("xdg-open").arg(store::preset_dir()).spawn();
@@ -853,7 +948,7 @@ impl PhthoraApp {
                             ui.end_row();
                             ui.label("Audio");
                             ui.horizontal(|ui| {
-                                let has = self.input_info.as_ref().map(|i| i.has_audio).unwrap_or(false);
+                                let has = self.input_audio_usable();
                                 if !has && self.export.audio == AudioChoice::Input {
                                     self.export.audio = AudioChoice::None;
                                 }
@@ -1011,8 +1106,15 @@ impl eframe::App for PhthoraApp {
         self.handle_actions(actions);
         self.settings_window(&ctx);
         self.export_window(&ctx);
+        // an edit is complete once the pointer is released and no text field has focus
+        if !ctx.input(|i| i.pointer.any_down()) && !ctx.egui_wants_keyboard_input() {
+            self.history.observe(&self.chain.effects);
+        }
         // keep animating at the output frame rate
-        if self.timing.mode == OutputMode::Video && self.playing || self.export.running.is_some() {
+        if self.waiting {
+            self.waiting = false;
+            ctx.request_repaint_after(std::time::Duration::from_millis(4));
+        } else if self.timing.mode == OutputMode::Video && self.playing || self.export.running.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(1.0 / self.timing.fps.max(1.0)));
         }
     }
