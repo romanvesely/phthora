@@ -20,6 +20,7 @@ pub fn create_hook(_ctx: &GpuContext, desc: &EffectDesc) -> Option<Box<dyn Shade
         "super8" => Box::new(Super8::default()),
         "ascii" => Box::new(Ascii::default()),
         "caption" => Box::new(Caption::default()),
+        "audio_visualizer" => Box::new(Visualizer::default()),
         _ => return None,
     })
 }
@@ -440,5 +441,133 @@ impl ShaderHook for Caption {
     fn texture(&self, name: &str) -> Option<TexInput<'_>> {
         let s = if self.repeat { SamplerKind::LinearRepeat } else { SamplerKind::LinearClamp };
         (name == "tCaption").then(|| self.tex.as_ref().map(|t| tex(t, s))).flatten()
+    }
+}
+
+// ---------------------------------------------------------------- Audio visualizer
+
+/// Frequency bars drawn on a canvas the size of the output, blended by the shader.
+#[derive(Default)]
+struct Visualizer {
+    tex: Option<Rc<Target>>,
+    key: Option<(Vec<u32>, Vec<u32>)>,
+}
+
+/// Index into the log spectrum for a frequency (512 bins up to 22050 Hz).
+fn log_index_for_freq(freq: f32) -> f32 {
+    let bins = 512.0f32;
+    let linear = freq / 22050.0 * (bins - 1.0);
+    let log_scale = bins.ln() / bins;
+    linear.max(1.0).ln() / log_scale
+}
+
+fn color_u8(e: &ResolvedEffect, k: &str) -> tiny_skia::Color {
+    match e.values.get(k) {
+        Some(phthora_core::Value::Color(c)) => tiny_skia::Color::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), 1.0).unwrap(),
+        _ => tiny_skia::Color::WHITE,
+    }
+}
+
+/// Bar heights 0..1 as the reference computes them: mean of the bins in each bar's
+/// slice of 20 Hz .. 10 kHz, shaped by the edge envelope.
+fn visualizer_bars(spectrum: &[f32], num_bars: usize, mirror_radial: bool, edge: f32) -> Vec<f32> {
+    let min_bin = log_index_for_freq(20.0).floor();
+    let max_bin = log_index_for_freq(10000.0).ceil();
+    let per_bar = (max_bin - min_bin) / num_bars as f32;
+    (0..num_bars)
+        .map(|bar| {
+            let mut idx = bar as f32;
+            if mirror_radial {
+                // each half of the circle shows the full range
+                idx = if (bar as f32) < num_bars as f32 / 2.0 { bar as f32 * 2.0 } else { (num_bars - bar - 1) as f32 * 2.0 };
+            }
+            let a = (min_bin + idx * per_bar).floor() as usize;
+            let b = (min_bin + (idx + 1.0) * per_bar).floor() as usize;
+            let vals: Vec<f32> = (a..b).map(|i| spectrum.get(i).copied().unwrap_or(0.0)).collect();
+            let mut v = if vals.is_empty() { 0.0 } else { vals.iter().sum::<f32>() / vals.len() as f32 };
+            if edge > 0.0 {
+                let x = bar as f32 / (num_bars as f32 - 1.0);
+                v *= (4.0 * x * (1.0 - x)).max(0.0).powf(edge);
+            }
+            v
+        })
+        .collect()
+}
+
+impl ShaderHook for Visualizer {
+    fn prepare(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect) {
+        use tiny_skia::{GradientStop, LinearGradient, Paint, PathBuilder, Point, RadialGradient, SpreadMode, Transform};
+        let (w, h) = (rc.width, rc.height);
+        let num = (e.f("numBars").floor() as usize).max(1);
+        let (radial, mirror) = (e.b("radial"), e.b("mirror"));
+        let bars = visualizer_bars(rc.audio, num, radial && mirror, e.f("edgeDampening"));
+        let cols = [color_u8(e, "color1"), color_u8(e, "color2"), color_u8(e, "color3")];
+        let key = (
+            bars.iter().map(|v| v.to_bits()).chain([w, h, radial as u32, mirror as u32]).collect(),
+            cols.iter().flat_map(|c| [c.red(), c.green(), c.blue()]).map(f32::to_bits).collect(),
+        );
+        if self.tex.is_some() && self.key.as_ref() == Some(&key) {
+            return;
+        }
+        let Some(mut pm) = tiny_skia::Pixmap::new(w.max(1), h.max(1)) else { return };
+        let (wf, hf) = (w as f32, h as f32);
+        let stop = |p: f32, c: tiny_skia::Color| GradientStop::new(p, c);
+        let mut paint = Paint { anti_alias: true, ..Default::default() };
+        if radial {
+            let (cx, cy) = (wf / 2.0, hf / 2.0);
+            let max_r = wf.min(hf) / 2.0;
+            let inner = max_r * 0.4;
+            let step = std::f32::consts::TAU / num as f32;
+            if let Some(sh) = RadialGradient::new(Point::from_xy(cx, cy), inner, Point::from_xy(cx, cy), max_r, vec![stop(0.0, cols[0]), stop(0.4, cols[1]), stop(0.8, cols[2])], SpreadMode::Pad, Transform::identity()) {
+                paint.shader = sh;
+            }
+            let half = (step * 0.9 / 2.0).tan() * inner;
+            for (bar, v) in bars.iter().enumerate() {
+                let ang = bar as f32 * step - std::f32::consts::FRAC_PI_2;
+                let (c, s) = (ang.cos(), ang.sin());
+                let end = inner + v * (max_r - inner);
+                let pt = |r: f32, side: f32| (cx + c * r - s * half * side, cy + s * r + c * half * side);
+                let mut pb = PathBuilder::new();
+                let p0 = pt(inner, 1.0);
+                pb.move_to(p0.0, p0.1);
+                for (r, side) in [(end, 1.0), (end, -1.0), (inner, -1.0)] {
+                    let q = pt(r, side);
+                    pb.line_to(q.0, q.1);
+                }
+                pb.close();
+                if let Some(path) = pb.finish() {
+                    pm.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                }
+            }
+        } else {
+            let grad = if mirror {
+                LinearGradient::new(Point::from_xy(0.0, 0.0), Point::from_xy(0.0, hf), vec![stop(0.1, cols[2]), stop(0.3, cols[1]), stop(0.5, cols[0]), stop(0.7, cols[1]), stop(0.9, cols[2])], SpreadMode::Pad, Transform::identity())
+            } else {
+                LinearGradient::new(Point::from_xy(0.0, hf), Point::from_xy(0.0, 0.0), vec![stop(0.0, cols[0]), stop(0.4, cols[1]), stop(0.8, cols[2])], SpreadMode::Pad, Transform::identity())
+            };
+            if let Some(sh) = grad {
+                paint.shader = sh;
+            }
+            let bw = wf / num as f32;
+            for (bar, v) in bars.iter().enumerate() {
+                let bh = v * hf;
+                let y = if mirror { (hf - bh) / 2.0 } else { hf - bh };
+                if let Some(r) = tiny_skia::Rect::from_xywh(bar as f32 * bw, y, bw * 0.85, bh) {
+                    pm.fill_rect(r, &paint, Transform::identity(), None);
+                }
+            }
+        }
+        let data: Vec<u8> = pm.pixels().iter().flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        }).collect();
+        match &self.tex {
+            Some(t) if t.size() == (w, h) => assets::upload(rc.ctx, t, &data, true),
+            _ => self.tex = Some(Rc::new(assets::texture_from_rgba(rc.ctx, w, h, &data, true, "visualizer"))),
+        }
+        self.key = Some(key);
+    }
+    fn texture(&self, name: &str) -> Option<TexInput<'_>> {
+        (name == "barsTexture").then(|| self.tex.as_ref().map(|t| tex(t, SamplerKind::LinearClamp))).flatten()
     }
 }

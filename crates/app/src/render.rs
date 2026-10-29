@@ -100,9 +100,11 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
         }
         let ft = timing.at_frame(i);
         let mut live = LiveInputs::default();
-        for (k, v) in levels.at(i, timing.fps, job.audio_track.as_ref(), &job.audio_settings).bands.iter().take(live.audio.len()).enumerate() {
+        let lv = levels.at(i, timing.fps, job.audio_track.as_ref(), &job.audio_settings);
+        for (k, v) in lv.bands.iter().take(live.audio.len()).enumerate() {
             live.audio[k] = *v;
         }
+        engine.audio_spectrum.clone_from(&lv.spectrum);
         let resolved: Vec<_> = job.effects.iter().filter(|e| e.enabled).map(|e| e.resolve(&ft, &live, &midi)).collect();
         engine.render(&resolved, &ft);
         if let Some(px) = readback.push(engine.output(), engine.blank()) {

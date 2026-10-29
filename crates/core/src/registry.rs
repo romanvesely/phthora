@@ -43,8 +43,8 @@ pub fn registry() -> &'static [EffectDesc] {
     })
 }
 
-/// Effects described in the catalog but not implemented yet (live drawing and audio input).
-pub const NOT_AVAILABLE: &[&str] = &["audio_visualizer", "push_draw", "mask_draw"];
+/// Effects described in the catalog but not implemented yet (live drawing).
+pub const NOT_AVAILABLE: &[&str] = &["push_draw", "mask_draw"];
 
 impl EffectDesc {
     /// Whether the effect can be added from the UI and the command line.

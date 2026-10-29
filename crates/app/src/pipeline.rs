@@ -70,6 +70,8 @@ struct Rendered {
     source: Option<u64>,
     effects: Vec<ResolvedEffect>,
     look: ([u32; 4], bool, (u32, u32)),
+    /// audio spectrum, only while an effect draws it
+    spectrum: Vec<u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,7 +115,8 @@ impl Preview {
             }
         }
         let look = (engine.background.map(f32::to_bits), engine.flip_x, engine.size());
-        let next = Rendered { frame: n, source, effects, look };
+        let spectrum = if effects.iter().any(|e| e.desc.id == "audio_visualizer") { engine.audio_spectrum.iter().map(|v| v.to_bits()).collect() } else { Vec::new() };
+        let next = Rendered { frame: n, source, effects, look, spectrum };
         if self.last.as_ref() == Some(&next) {
             return Step::Unchanged;
         }
@@ -157,7 +160,7 @@ mod tests {
             .unwrap();
         assert!(st.success());
         let mut chain = Chain::default();
-        for id in ["feedback", "pixel_sort", "data_mosh", "rgb_shift"] {
+        for id in ["feedback", "pixel_sort", "data_mosh", "audio_visualizer", "rgb_shift"] {
             let uid = chain.add(id).unwrap();
             chain.get_mut(uid).unwrap().seed = 0.37;
         }
@@ -217,9 +220,11 @@ mod tests {
         for n in 0..total {
             let ft = timing.at_frame(n);
             let mut live = LiveInputs::default();
-            for (k, v) in levels.at(n, timing.fps, Some(&track), &audio_settings).bands.iter().take(4).enumerate() {
+            let lv = levels.at(n, timing.fps, Some(&track), &audio_settings);
+            for (k, v) in lv.bands.iter().take(4).enumerate() {
                 live.audio[k] = *v;
             }
+            engine.audio_spectrum.clone_from(&lv.spectrum);
             audio_moved |= live.audio[1] > 0.05;
             loop {
                 let fx = chain.resolve(&ft, &live, &HashMap::new());

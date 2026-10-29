@@ -30,6 +30,8 @@ pub struct Engine {
     pub background: [f32; 4],
     pub flip_x: bool,
     pub assets: Assets,
+    /// log-frequency audio spectrum for the next render (audio visualizer)
+    pub audio_spectrum: Vec<f32>,
     last_output: Option<u64>,
 }
 
@@ -51,6 +53,7 @@ impl Engine {
             background: [0.0, 0.0, 0.0, 1.0],
             flip_x: false,
             assets: Assets::new(),
+            audio_spectrum: Vec::new(),
             last_output: None,
         }
     }
@@ -148,6 +151,7 @@ impl Engine {
                     clear,
                     blank: &self.blank,
                     assets: &mut self.assets,
+                    audio: &self.audio_spectrum,
                 };
                 slot.effect.render(&mut rc, e, input, orig, &slot.out);
             }

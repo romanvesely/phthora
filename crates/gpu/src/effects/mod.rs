@@ -25,6 +25,8 @@ pub struct RenderCtx<'a> {
     pub clear: [f64; 4],
     pub blank: &'a Target,
     pub assets: &'a mut Assets,
+    /// log-frequency audio spectrum of this frame, 0..1 (empty without audio)
+    pub audio: &'a [f32],
 }
 
 pub trait GpuEffect {

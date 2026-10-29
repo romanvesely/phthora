@@ -411,6 +411,7 @@ impl PhthoraApp {
         let ft = timing.at_frame(n);
         self.last_ft = ft;
         let live = self.audio.inputs(n, timing.fps);
+        self.engine.audio_spectrum.clone_from(&self.audio.spectrum);
         let resolved: Vec<ResolvedEffect> = self.chain.resolve(&ft, &live, &HashMap::new());
         self.live = resolved.iter().map(|r| (r.uid, r.values.clone())).collect();
         let video = match &self.source {

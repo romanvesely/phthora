@@ -39,7 +39,8 @@ fn list_hides_unavailable_effects() {
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.lines().any(|l| l.starts_with("pixelate ")));
     assert!(s.lines().any(|l| l.starts_with("data_mosh ")));
-    assert!(!s.contains("push_draw") && !s.contains("mask_draw") && !s.contains("audio_visualizer"));
+    assert!(!s.contains("push_draw") && !s.contains("mask_draw"));
+    assert!(s.contains("audio_visualizer"));
 }
 
 #[test]

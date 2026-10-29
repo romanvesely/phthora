@@ -140,3 +140,42 @@ fn readback_ring_matches_cpu_conversion() {
         assert!(a == b, "frame {i}: GPU output pass differs from CPU conversion");
     }
 }
+
+#[test]
+fn audio_visualizer_draws_the_spectrum() {
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (180, 100);
+    let mut engine = Engine::new(&ctx, w, h);
+    engine.set_source_rgba(w, h, &[0, 0, 0, 255].repeat((w * h) as usize));
+    let ts = TimingSettings::default();
+    let t = ts.at_frame(0);
+    let mut e = EffectInstance::by_id("audio_visualizer").unwrap();
+    e.set("mirror", phthora_core::Value::Bool(false));
+    e.set("edgeDampening", phthora_core::Value::Float(0.0));
+    let r = e.resolve(&t, &LiveInputs::default(), &HashMap::new());
+    let lit = |px: &[u8], x0: u32, x1: u32, y0: u32, y1: u32| {
+        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (y * w + x) as usize * 4)).filter(|&i| px[i] > 40 || px[i + 1] > 40).count()
+    };
+    // without audio nothing is drawn
+    engine.render(std::slice::from_ref(&r), &t);
+    let px = engine.read_output();
+    assert_eq!(lit(&px, 0, w, 0, h), 0);
+    // loud low frequencies: tall bars on the left, growing from the bottom
+    engine.audio_spectrum = (0..512).map(|i| if i < 100 { 0.9 } else { 0.0 }).collect();
+    engine.render(std::slice::from_ref(&r), &t);
+    let px = engine.read_output();
+    let left = lit(&px, 0, w / 8, h / 2, h);
+    assert!(left > (w / 8 * h / 2) as usize / 2, "left bars: {left}");
+    assert_eq!(lit(&px, w / 2, w, 0, h), 0, "high bars stay empty");
+    assert_eq!(lit(&px, 0, w / 8, 0, h / 20), 0, "bars start at the bottom");
+    // bottom of a bar is color1 (green)
+    let i = ((h - 2) * w + 2) as usize * 4;
+    assert!(px[i + 1] > 200 && px[i] < 60, "{:?}", &px[i..i + 4]);
+    // radial mode draws around the centre
+    e.set("radial", phthora_core::Value::Bool(true));
+    let r = e.resolve(&t, &LiveInputs::default(), &HashMap::new());
+    engine.render(std::slice::from_ref(&r), &t);
+    let px = engine.read_output();
+    assert!(lit(&px, 0, w, 0, h) > 100);
+    assert_eq!(lit(&px, w / 2 - 5, w / 2 + 5, h / 2 - 5, h / 2 + 5), 0, "inner circle stays empty");
+}
