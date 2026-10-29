@@ -159,9 +159,14 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             "--list" => {
                 use std::io::Write;
                 let mut out = std::io::stdout().lock();
-                for d in phthora_core::registry::available() {
+                // grouped by category, in the order of the editor's effect list
+                let cats = phthora_core::registry::categories();
+                let mut list: Vec<_> = phthora_core::registry::available().collect();
+                list.sort_by_key(|d| cats.iter().position(|c| *c == d.category));
+                let w = list.iter().map(|d| d.id.len()).max().unwrap_or(0);
+                for d in list {
                     // stop quietly when the reader goes away (e.g. piped into head)
-                    if writeln!(out, "{:16} {:24} {}", d.id, d.category, d.name).is_err() {
+                    if writeln!(out, "{:w$} {:24} {}", d.id, d.category, d.name).is_err() {
                         break;
                     }
                 }

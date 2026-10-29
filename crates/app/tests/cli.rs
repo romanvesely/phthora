@@ -40,6 +40,11 @@ fn list_shows_all_effects() {
     assert!(s.lines().any(|l| l.starts_with("pixelate ")));
     assert!(s.lines().any(|l| l.starts_with("data_mosh ")));
     assert!(s.contains("audio_visualizer") && s.contains("push_draw") && s.contains("mask_draw"));
+    // each category in one block, like the editor's list
+    let cats: Vec<&str> = s.lines().map(|l| l.split_whitespace().nth(1).unwrap_or("")).collect();
+    let blocks = cats.windows(2).filter(|w| w[0] != w[1]).count() + 1;
+    let distinct: std::collections::HashSet<_> = cats.iter().collect();
+    assert_eq!(blocks, distinct.len());
 }
 
 #[test]
