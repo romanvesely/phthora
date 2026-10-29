@@ -142,7 +142,8 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                                 ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
                             }
                         }
-                        if r.double_clicked() {
+                        // a slider only senses drags: add clicks, or it never sees a double click
+                        if r.interact(egui::Sense::click()).double_clicked() {
                             e.reset(&key);
                             v = e.f(&key);
                             changed = true;
