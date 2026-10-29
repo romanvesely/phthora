@@ -12,7 +12,7 @@ their own licenses and credits.
 roboto-regular.ttf       Roboto, Christian Robertson / Google, Apache License 2.0
 roboto-mono-regular.ttf  Roboto Mono, Copyright 2015 Google Inc., Apache License 2.0
 press-start-2p.ttf       Press Start 2P, Copyright (c) 2011 Cody "CodeMan38" Boisclair,
-                         SIL Open Font License 1.1 (full text in section 6)
+                         SIL Open Font License 1.1 (full text in section 7)
 vcr-osd-mono.ttf         VCR OSD Mono, Riciery Leal, distributed as freeware
 
 Fonts that cannot be redistributed (Impact, a serif face) are looked up on the
@@ -84,14 +84,26 @@ the AnalyserNode in the Web Audio API specification (W3C, https://www.w3.org/TR/
 Blackman window, magnitude scaling, smoothing and the decibel-to-byte conversion.
 
 
-5. Rust dependencies
+5. Person segmentation model (downloaded at run time, not part of this repository)
+-----------------------------------------------------------------------------------
+
+Remove Background (crates/seg) downloads and runs MediaPipe Selfie Segmentation
+(landscape variant), Google LLC, Apache License 2.0 (full text in section 8).
+Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf
+ONNX conversion by the onnx-community (Apache-2.0), fetched from
+https://huggingface.co/onnx-community/mediapipe_selfie_segmentation_landscape
+The file is verified by its SHA-256 before use. It is inference only: the network
+runs through tract (MIT OR Apache-2.0, https://github.com/sonos/tract).
+
+
+6. Rust dependencies
 --------------------
 
 Crates pulled in through Cargo.toml keep their own licenses; run
 `cargo tree` or a tool such as cargo-about to list them.
 
 
-6. SIL Open Font License 1.1 (Press Start 2P)
+7. SIL Open Font License 1.1 (Press Start 2P)
 ---------------------------------------------
 
 Copyright (c) 2011, Cody "CodeMan38" Boisclair (cody@zone38.net),
@@ -190,8 +202,8 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
-7. Apache License 2.0 (Roboto, Roboto Mono)
--------------------------------------------
+8. Apache License 2.0 (Roboto, Roboto Mono, segmentation model)
+----------------------------------------------------------------
 
 Apache License
 Version 2.0, January 2004

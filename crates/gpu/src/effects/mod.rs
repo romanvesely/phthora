@@ -2,6 +2,7 @@
 
 pub mod graph;
 pub mod hooks;
+mod person;
 
 use crate::assets::Assets;
 use crate::context::{GpuContext, SamplerKind, Target};
@@ -31,6 +32,12 @@ pub struct RenderCtx<'a> {
     pub audio: &'a [f32],
     /// live drawing canvases by effect uid (the editor); without one the effect's data is used
     pub paint: &'a std::collections::HashMap<u64, crate::paint::PaintCanvas>,
+    /// effects that need the image on the CPU (person segmentation): true waits for the
+    /// result every frame (export, same mask for the same frame), false never waits and
+    /// uses the newest mask that is done (live preview)
+    pub blocking: bool,
+    /// person mask supplied by the caller instead of the network
+    pub person_mask: Option<&'a phthora_seg::Mask>,
 }
 
 pub trait GpuEffect {
@@ -116,6 +123,10 @@ pub fn value_to_uval(v: &Value) -> Option<UVal> {
 /// Extra uniforms/textures a hook provides for a shader effect.
 pub trait ShaderHook {
     fn prepare(&mut self, _rc: &mut RenderCtx, _e: &ResolvedEffect) {}
+    /// Like `prepare`, for hooks that also need the effect's input image.
+    fn prepare_input(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect, _input: &Target) {
+        self.prepare(rc, e);
+    }
     fn uniform(&self, _key: &str) -> Option<UVal> {
         None
     }
@@ -156,7 +167,7 @@ impl ShaderEffect {
 impl GpuEffect for ShaderEffect {
     fn render(&mut self, rc: &mut RenderCtx, e: &ResolvedEffect, input: &Target, orig: &Target, out: &Target) {
         if let Some(h) = self.hook.as_mut() {
-            h.prepare(rc, e);
+            h.prepare_input(rc, e, input);
         }
         if let Some(layout) = &self.shader.uniform {
             let hook = &self.hook;
