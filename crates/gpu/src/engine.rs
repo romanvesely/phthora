@@ -100,8 +100,6 @@ impl Engine {
 
     /// Render one frame. Returns the final target (bottom-up rows, premultiplied).
     pub fn render(&mut self, effects: &[ResolvedEffect], ft: &FrameTime) -> &Target {
-        // drop GPU state of removed effects, create new ones
-        self.slots.retain(|uid, _| effects.iter().any(|e| e.uid == *uid));
         for e in effects {
             if !self.slots.contains_key(&e.uid) {
                 let effect = effects::create(&self.ctx, &self.lib, e);
@@ -158,6 +156,17 @@ impl Engine {
         self.ctx.queue.submit([enc.finish()]);
         self.last_output = order.last().copied();
         self.output()
+    }
+
+    /// Drop the GPU state of effects that are gone. Disabled effects keep theirs, so
+    /// switching an effect off and on again does not rebuild it.
+    pub fn retain(&mut self, alive: impl Fn(u64) -> bool) {
+        self.slots.retain(|uid, _| alive(*uid));
+    }
+
+    /// 1x1 transparent texture (fallback binding).
+    pub fn blank(&self) -> &Target {
+        &self.blank
     }
 
     /// Result of the last render.

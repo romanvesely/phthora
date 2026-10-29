@@ -12,10 +12,12 @@ mod embedded {
 
 pub const FULLSCREEN_WGSL: &str = include_str!("../wgsl/fullscreen.wgsl");
 pub const INPUT_WGSL: &str = include_str!("../wgsl/input.wgsl");
+pub const OUTPUT_WGSL: &str = include_str!("../wgsl/output.wgsl");
 
 pub fn shader_source(name: &str) -> Option<&'static str> {
     match name {
         "input" => Some(INPUT_WGSL),
+        "output" => Some(OUTPUT_WGSL),
         _ => embedded::SHADERS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s),
     }
 }
@@ -284,6 +286,7 @@ pub struct TexInput<'a> {
 }
 
 /// Run a fullscreen pass. `clear` is the (premultiplied) clear color; None keeps the target contents.
+#[allow(clippy::too_many_arguments)]
 pub fn run_pass<'a>(
     ctx: &GpuContext,
     enc: &mut wgpu::CommandEncoder,

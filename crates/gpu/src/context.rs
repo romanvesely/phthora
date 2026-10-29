@@ -205,6 +205,18 @@ pub fn map_buffer(ctx: &GpuContext, buf: &wgpu::Buffer, width: u32, height: u32)
     out
 }
 
+/// Convert premultiplied to straight alpha in place (same rounding as the output pass).
+pub fn unpremultiply(px: &mut [u8]) {
+    for p in px.as_chunks_mut::<4>().0 {
+        let a = p[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+}
+
 /// Reverse row order of a tightly packed RGBA8 image.
 pub fn flip_rows(data: &mut [u8], width: u32, height: u32) {
     let row = width as usize * 4;

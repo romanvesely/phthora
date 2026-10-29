@@ -102,3 +102,41 @@ fn dump_effects() {
         enc.write_header().unwrap().write_image_data(&out).unwrap();
     }
 }
+
+#[test]
+fn readback_ring_matches_cpu_conversion() {
+    let ctx = GpuContext::headless().expect("gpu");
+    let (w, h) = (97, 61); // odd width: padded rows
+    let mut engine = Engine::new(&ctx, w, h);
+    let mut img = test_image(w, h);
+    // all alpha values, so every rounding case of the unpremultiply runs
+    for (i, p) in img.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        p[3] = (i % 256) as u8;
+    }
+    engine.set_source_rgba(w, h, &img);
+    engine.background = [0.0; 4];
+    let mut rb = phthora_gpu::Readback::new(&ctx, &engine.lib, w, h);
+    let ts = TimingSettings::default();
+    let mut expected = Vec::new();
+    let mut got = Vec::new();
+    for i in 0..5u64 {
+        let e = EffectInstance::by_id("hue_cycle").unwrap();
+        let t = ts.at_frame(i * 7);
+        let r = e.resolve(&t, &LiveInputs::default(), &HashMap::new());
+        engine.render(std::slice::from_ref(&r), &t);
+        let mut px = engine.read_output();
+        phthora_gpu::context::unpremultiply(&mut px);
+        expected.push(px);
+        let out = engine.output();
+        if let Some(f) = rb.push(out, engine.blank()) {
+            got.push(f);
+        }
+    }
+    while let Some(f) = rb.pop() {
+        got.push(f);
+    }
+    assert_eq!(got.len(), expected.len());
+    for (i, (a, b)) in got.iter().zip(&expected).enumerate() {
+        assert!(a == b, "frame {i}: GPU output pass differs from CPU conversion");
+    }
+}
