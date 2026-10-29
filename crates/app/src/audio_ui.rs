@@ -6,6 +6,7 @@ use phthora_audio::{Analyzer, AudioSettings, AudioTrack, BandDef, Follower, Fram
 use phthora_core::modulator::{LiveInputs, MAX_BANDS};
 use phthora_media::AudioSource;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,6 +42,8 @@ pub struct AudioState {
     /// current level of the "all" band (meter)
     pub meter: f32,
     pub spectrum: Vec<f32>,
+    /// level of the "all" band over the output, for the keyframe editor (key, levels)
+    envelope: Option<(String, Arc<Vec<f32>>)>,
 }
 
 impl AudioState {
@@ -65,6 +68,7 @@ impl AudioState {
             frames: FrameLevels::default(),
             meter: 0.0,
             spectrum: Vec::new(),
+            envelope: None,
         }
     }
 
@@ -121,6 +125,34 @@ impl AudioState {
         } else if self.src != Src::Mic {
             self.mic = None;
         }
+    }
+
+    /// Loudness (RMS) of the audio track over an output `duration` seconds long, in evenly
+    /// spaced slices, or None without an analysed track.
+    pub fn envelope(&mut self, duration: f64) -> Option<Arc<Vec<f32>>> {
+        const POINTS: usize = 200;
+        let track = self.track.as_ref()?;
+        let key = format!("{:p} {} {:?} {duration}", Arc::as_ptr(&track.pcm), track.start, track.end);
+        if let Some((k, env)) = &self.envelope
+            && *k == key
+        {
+            return Some(env.clone());
+        }
+        let rate = phthora_audio::SAMPLE_RATE as f64;
+        let slice = duration / POINTS as f64;
+        let n = ((slice * rate) as usize).max(1);
+        // every fourth sample is plenty for a level
+        let env: Arc<Vec<f32>> = Arc::new(
+            (0..POINTS)
+                .map(|i| {
+                    let start = (track.track_time(i as f64 * slice) * rate) as usize;
+                    let (sum, count) = (start..start + n).step_by(4).filter_map(|j| track.pcm.get(j)).fold((0.0f32, 0u32), |(s, c), v| (s + v * v, c + 1));
+                    if count > 0 { (sum / count as f32).sqrt() } else { 0.0 }
+                })
+                .collect(),
+        );
+        self.envelope = Some((key, env.clone()));
+        Some(env)
     }
 
     pub fn loading(&self) -> bool {

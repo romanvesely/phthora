@@ -1278,6 +1278,7 @@ impl PhthoraApp {
         let mode = self.timing.mode;
         let playhead = self.last_ft.export_progress;
         let custom_bands = self.audio.settings.custom.len();
+        let audio_env = self.audio.envelope(self.timing.duration);
         let blink = self.learning.as_ref().is_some_and(|l| l.started.elapsed().as_millis() / 300 % 2 == 0);
         let active_draw = self.active_draw();
         let mut pick_draw = None;
@@ -1387,7 +1388,7 @@ impl PhthoraApp {
                     });
                     if e.expanded {
                         let learning = self.learning.as_ref().map(|l| (l.uid, l.key.as_str()));
-                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink };
+                        let mut cx = ParamCtx { mode, live: self.live.get(&uid), playhead, actions: &mut actions, open_mods: &mut self.open_mods, custom_bands, learning, blink, audio_env: audio_env.as_deref().map(|v| v.as_slice()) };
                         params_ui::effect_params(ui, e, &mut cx);
                     }
                 })

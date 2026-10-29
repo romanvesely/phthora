@@ -1,6 +1,6 @@
 //! Widgets for effect parameters and their modulators.
 
-use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use phthora_core::modulator::{keyframe_value, Band, Modulator, Shape};
 use phthora_core::params::{ColorStop, ParamKind, Value};
 use phthora_core::{EffectInstance, OutputMode};
@@ -29,6 +29,8 @@ pub struct ParamCtx<'a> {
     /// modulator waiting for a MIDI message (uid, parameter) and whether it is lit now
     pub learning: Option<(u64, &'a str)>,
     pub blink: bool,
+    /// level of the audio track over the output (keyframe editor background)
+    pub audio_env: Option<&'a [f32]>,
 }
 
 const LABEL_W: f32 = 92.0;
@@ -155,7 +157,8 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                     let m = e.modulators.entry(key.clone()).or_default();
                     let learn = cx.learning.is_some_and(|(u, k)| u == uid && k == key).then_some(cx.blink);
                     let mut learn_clicked = false;
-                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), cx.playhead, cx.custom_bands, learn, &mut learn_clicked) {
+                    let kx = KeyCtx { title: &p.label, playhead: cx.playhead, env: cx.audio_env };
+                    if modulator_ui(ui, m, ui.make_persistent_id((uid, &key)), &kx, cx.custom_bands, learn, &mut learn_clicked) {
                         changed = true;
                     }
                     if learn_clicked {
@@ -340,12 +343,20 @@ fn modulator_clipboard(ui: &mut egui::Ui, m: Option<&Modulator>) -> Option<Modul
 }
 
 /// `learning`: this modulator waits for MIDI (value: lit in this blink phase).
-fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f64, custom_bands: usize, learning: Option<bool>, learn_clicked: &mut bool) -> bool {
+/// What the keyframe editor shows besides the points.
+struct KeyCtx<'a> {
+    /// parameter name, for the large editor's title
+    title: &'a str,
+    playhead: f64,
+    env: Option<&'a [f32]>,
+}
+
+fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, kx: &KeyCtx, custom_bands: usize, learning: Option<bool>, learn_clicked: &mut bool) -> bool {
     let before = m.clone();
     egui::Frame::group(ui.style()).inner_margin(6.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.checkbox(&mut m.enabled, "on");
-            egui::ComboBox::from_id_salt(id.with("shape")).selected_text(m.shape.label()).width(80.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt(id.with("shape")).selected_text(m.shape.label()).width(80.0).height(400.0).show_ui(ui, |ui| {
                 for s in Shape::ALL {
                     ui.selectable_value(&mut m.shape, s, s.label());
                 }
@@ -383,11 +394,32 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f6
             }
         });
         if m.shape == Shape::Keys {
-            if m.keyframes.is_empty() {
-                m.keyframes = vec![[0.0, 0.0], [1.0, 1.0]];
+            let big_id = id.with("expanded");
+            let mut big = ui.data(|d| d.get_temp::<bool>(big_id)).unwrap_or(false);
+            keyframe_editor(ui, id.with("keys"), &mut m.keyframes, kx, 70.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Shift: snap · double click: delete").small().weak())
+                    .on_hover_text("Click to add a keyframe, drag to move it (Shift snaps to steps of 0.05), double or right click to delete it. The background shows the loudness of the audio track.");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("⛶").on_hover_text("Large editor").clicked() {
+                        big = !big;
+                    }
+                    if ui.add_enabled(!m.keyframes.is_empty(), egui::Button::new("Clear").small()).on_hover_text("Remove all keyframes").clicked() {
+                        m.keyframes.clear();
+                    }
+                });
+            });
+            if big {
+                egui::Window::new(format!("Keyframes: {}", kx.title))
+                    .id(id.with("window"))
+                    .open(&mut big)
+                    .default_size([720.0, 340.0])
+                    .show(ui.ctx(), |ui| {
+                        let h = (ui.available_height() - 4.0).max(160.0);
+                        keyframe_editor(ui, id.with("keys big"), &mut m.keyframes, kx, h);
+                    });
             }
-            keyframe_editor(ui, id.with("keys"), &mut m.keyframes, playhead);
-            ui.label(egui::RichText::new("click: add · drag: move · right click: delete").small().weak());
+            ui.data_mut(|d| d.insert_temp(big_id, big));
         } else if m.shape == Shape::Midi {
             // the controller value maps straight onto the parameter range
         } else {
@@ -424,59 +456,103 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, playhead: f6
 }
 
 /// Editable piecewise-linear curve over output progress (x) to value (y), both 0..1.
-fn keyframe_editor(ui: &mut egui::Ui, id: egui::Id, pts: &mut Vec<[f64; 2]>, playhead: f64) {
-    let size = Vec2::new(ui.available_width().max(120.0), 70.0);
+/// Without points the value stays at 1.
+fn keyframe_editor(ui: &mut egui::Ui, id: egui::Id, pts: &mut Vec<[f64; 2]>, kx: &KeyCtx, height: f32) {
+    let size = Vec2::new(ui.available_width().max(120.0), height);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
     let to_screen = |p: [f64; 2]| Pos2::new(rect.left() + p[0] as f32 * rect.width(), rect.bottom() - p[1] as f32 * rect.height());
     let from_screen = |q: Pos2| [((q.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64, ((rect.bottom() - q.y) / rect.height()).clamp(0.0, 1.0) as f64];
-    // curve
-    let n = 64;
-    let line: Vec<Pos2> = (0..=n).map(|i| {
-        let x = i as f64 / n as f64;
-        to_screen([x, keyframe_value(pts, x)])
-    }).collect();
-    painter.add(egui::Shape::line(line, Stroke::new(1.5, Color32::from_rgb(120, 220, 160))));
-    // playhead
-    let px = rect.left() + playhead.clamp(0.0, 1.0) as f32 * rect.width();
+    // audio level over the output, then the grid
+    if let Some(env) = kx.env.filter(|e| !e.is_empty()) {
+        // scaled to the loudest point: the shape over time is what matters here
+        let peak = env.iter().fold(0.0f32, |a, v| a.max(*v));
+        if peak > 0.01 {
+            let w = rect.width() / env.len() as f32;
+            for (i, v) in env.iter().enumerate() {
+                let x = rect.left() + i as f32 * w;
+                let top = rect.bottom() - (v / peak).clamp(0.0, 1.0) * rect.height() * 0.9;
+                painter.rect_filled(Rect::from_min_max(Pos2::new(x, top), Pos2::new(x + w, rect.bottom())), 0.0, Color32::from_rgba_unmultiplied(90, 140, 200, 50));
+            }
+        }
+    }
+    let grid = Stroke::new(1.0, Color32::from_white_alpha(14));
+    for g in [0.25, 0.5, 0.75] {
+        let a = to_screen([g, g]);
+        painter.line_segment([Pos2::new(a.x, rect.top()), Pos2::new(a.x, rect.bottom())], grid);
+        painter.line_segment([Pos2::new(rect.left(), a.y), Pos2::new(rect.right(), a.y)], grid);
+    }
+    if pts.is_empty() {
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, "click to add keyframes", egui::FontId::proportional(11.0), ui.visuals().weak_text_color());
+    } else {
+        let n = 128;
+        let line: Vec<Pos2> = (0..=n).map(|i| {
+            let x = i as f64 / n as f64;
+            to_screen([x, keyframe_value(pts, x)])
+        }).collect();
+        painter.add(egui::Shape::line(line, Stroke::new(1.5, Color32::from_rgb(120, 220, 160))));
+    }
+    let px = rect.left() + kx.playhead.clamp(0.0, 1.0) as f32 * rect.width();
     painter.line_segment([Pos2::new(px, rect.top()), Pos2::new(px, rect.bottom())], Stroke::new(1.0, Color32::from_white_alpha(60)));
+
     let drag_id = id.with("drag");
     let mut dragging: Option<usize> = ui.data(|d| d.get_temp::<Option<usize>>(drag_id)).flatten();
-    let mut moved: Option<[f64; 2]> = None;
-    let hit = |q: Pos2, pts: &Vec<[f64; 2]>| pts.iter().position(|p| to_screen(*p).distance(q) < 7.0);
+    let hit = |q: Pos2, pts: &Vec<[f64; 2]>| pts.iter().position(|p| to_screen(*p).distance(q) < 8.0);
+    let snap = ui.input(|i| i.modifiers.shift);
+    let place = |q: Pos2| {
+        let mut p = from_screen(q);
+        if snap {
+            p = [(p[0] * 20.0).round() / 20.0, (p[1] * 20.0).round() / 20.0];
+        }
+        p
+    };
+    let add = |pts: &mut Vec<[f64; 2]>, p: [f64; 2]| {
+        let i = pts.partition_point(|q| q[0] <= p[0]);
+        pts.insert(i, p);
+        i
+    };
     if let Some(pos) = resp.interact_pointer_pos() {
-        if resp.drag_started() {
+        if resp.drag_started_by(egui::PointerButton::Primary) {
             // egui reports the drag only after a few pixels: hit-test where the press began
             let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
-            dragging = hit(origin, pts);
+            dragging = Some(hit(origin, pts).unwrap_or_else(|| add(pts, place(origin))));
         }
         if resp.dragged()
             && let Some(i) = dragging
-                && i < pts.len() {
-                    let q = from_screen(pos);
-                    pts[i] = q;
-                    moved = Some(q);
-                }
-        if resp.clicked() && hit(pos, pts).is_none() {
-            pts.push(from_screen(pos));
+            && i < pts.len()
+        {
+            // a point stays between its neighbours, so dragging never reorders
+            let lo = if i > 0 { pts[i - 1][0] } else { 0.0 };
+            let hi = if i + 1 < pts.len() { pts[i + 1][0] } else { 1.0 };
+            let q = place(pos);
+            pts[i] = [q[0].clamp(lo, hi), q[1]];
         }
-        if resp.secondary_clicked()
-            && let Some(i) = hit(pos, pts)
-                && pts.len() > 1 {
-                    pts.remove(i);
-                }
+        if resp.double_clicked() || resp.secondary_clicked() {
+            if let Some(i) = hit(pos, pts) {
+                pts.remove(i);
+            }
+        } else if resp.clicked() && hit(pos, pts).is_none() {
+            add(pts, place(pos));
+        }
     }
     if resp.drag_stopped() {
         dragging = None;
     }
-    pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
-    // keep tracking the dragged point after sorting
-    if let Some(q) = moved {
-        dragging = pts.iter().position(|p| *p == q);
-    }
     ui.data_mut(|d| d.insert_temp(drag_id, dragging));
-    for p in pts.iter() {
-        painter.circle_filled(to_screen(*p), 4.0, Color32::WHITE);
+    let hovered = resp.hover_pos().and_then(|q| hit(q, pts));
+    for (i, p) in pts.iter().enumerate() {
+        let active = dragging == Some(i) || hovered == Some(i);
+        painter.circle_filled(to_screen(*p), if active { 5.0 } else { 4.0 }, Color32::WHITE);
+    }
+    if let Some(i) = dragging.or(hovered).filter(|i| *i < pts.len()) {
+        let p = pts[i];
+        let at = to_screen(p);
+        // beside the point, kept inside the editor
+        let right = at.x > rect.right() - 80.0;
+        let below = at.y < rect.top() + 20.0;
+        let align = egui::Align2([if right { egui::Align::Max } else { egui::Align::Min }, if below { egui::Align::Min } else { egui::Align::Max }]);
+        let pos = at + Vec2::new(if right { -8.0 } else { 8.0 }, if below { 6.0 } else { -6.0 });
+        painter.text(pos, align, format!("{:.3}, {:.3}", p[0], p[1]), egui::FontId::monospace(10.0), Color32::WHITE);
     }
 }
