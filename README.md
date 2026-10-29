@@ -38,8 +38,9 @@ export looks exactly like the preview.
   left button, pan with the right button and zoom with the wheel. The view is saved in
   the preset and used by the export.
 - **Remove Background**: cuts people out of the picture with a small segmentation
-  network (462 KB, downloaded once after asking). The preview never waits for it;
-  the export segments every frame.
+  network (462 KB, downloaded once after asking). Playing video and the webcam use the
+  latest mask, so the preview never stalls; stills, a paused video and the export
+  segment every frame, so the mask always fits.
 - **Webcam**: live input from any V4L2 camera (Ctrl+W), mirrored by default. Effects
   loop every four seconds of real time. Recordings (with the microphone when it is the
   audio source) open as the input, ready for the export.
@@ -214,6 +215,7 @@ phthora render *.mp4 *.jpg --preset mine.phthora.json --out-dir done/
 | Your own fonts for Caption (TTF, OTF) | `$XDG_DATA_HOME/phthora/fonts` |
 | Log files | `$XDG_DATA_HOME/phthora/logs` (one per day, the last five are kept) |
 | Settings | `$XDG_CONFIG_HOME/phthora/settings.json` |
+| Exports | the last folder used, at first `$XDG_VIDEOS_DIR` (or the home folder) |
 | Assets | `assets/` next to the binary, or `PHTHORA_ASSETS` |
 
 ## Development
