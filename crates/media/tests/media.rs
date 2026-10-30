@@ -150,13 +150,18 @@ fn probe_rotation_swaps_size() {
     let t = Tmp::new("probe_rotation");
     let src = make_video(&t);
     let out = t.p("rot.mp4");
-    ff(&["-display_rotation", "90", "-i", src.to_str().unwrap(), "-c", "copy", out.to_str().unwrap()]);
-    let info = probe(&out).unwrap();
+    let (src, out) = (src.to_str().unwrap(), out.to_str().unwrap());
+    // -display_rotation since ffmpeg 6, the rotate tag before (later ffmpeg ignores it when copying)
+    let tagged = Command::new("ffmpeg").args(["-v", "error", "-y", "-i", src, "-c", "copy", "-metadata:s:v:0", "rotate=90", out]).status().unwrap();
+    if !tagged.success() || probe(Path::new(out)).unwrap().rotation == 0 {
+        ff(&["-display_rotation", "90", "-i", src, "-c", "copy", out]);
+    }
+    let info = probe(Path::new(out)).unwrap();
     assert_eq!((info.width, info.height), (48, 64));
     assert!(info.rotation == 90 || info.rotation == 270, "{}", info.rotation);
 
     // Decoder output must already be upright (ffmpeg autorotate).
-    let frames = drain(open(&out, 48, 64, DecodeOptions::default()));
+    let frames = drain(open(Path::new(out), 48, 64, DecodeOptions::default()));
     assert_eq!(frames.len(), 50);
     assert_eq!((frames[0].width, frames[0].height), (48, 64));
 }

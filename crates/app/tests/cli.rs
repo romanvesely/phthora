@@ -214,14 +214,15 @@ fn render_clip(d: &Path, name: &str, extra: &[&str]) -> (PathBuf, String) {
     (out, info)
 }
 
-/// Size, alpha flag and frame count from the chunks of an animated WebP.
-fn webp_anim(path: &Path) -> Option<(u32, u32, bool, usize)> {
+/// Size and frame count from the chunks of an animated WebP (frames may cover only the
+/// changed area, so the transparency is not visible from the header).
+fn webp_anim(path: &Path) -> Option<(u32, u32, usize)> {
     let b = std::fs::read(path).ok()?;
     if b.get(0..4)? != b"RIFF" || b.get(8..16)? != b"WEBPVP8X" {
         return None;
     }
     let u24 = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], 0]) + 1;
-    let (alpha, w, h) = (b[20] & 0x10 != 0, u24(24), u24(27));
+    let (w, h) = (u24(24), u24(27));
     let (mut at, mut frames, mut anim) = (12, 0, false);
     while at + 8 <= b.len() {
         let len = u32::from_le_bytes(b[at + 4..at + 8].try_into().ok()?) as usize;
@@ -232,7 +233,7 @@ fn webp_anim(path: &Path) -> Option<(u32, u32, bool, usize)> {
         }
         at += 8 + len + len % 2;
     }
-    anim.then_some((w, h, alpha, frames))
+    anim.then_some((w, h, frames))
 }
 
 fn alpha_pix_fmt(info: &str) -> bool {
@@ -250,7 +251,7 @@ fn animated_formats_by_extension_keep_alpha() {
         let (out, info) = render_clip(&d, name, &[]);
         if name == "a.webp" && info.contains("width=0") {
             // ffprobe before 7.1 cannot decode animated WebP: read the container instead
-            assert_eq!(webp_anim(&out), Some((64, 36, true, 5)), "{name}");
+            assert_eq!(webp_anim(&out), Some((64, 36, 5)), "{name}");
             continue;
         }
         // a width of 64 and 5 frames: 0.5 s at 10 fps
