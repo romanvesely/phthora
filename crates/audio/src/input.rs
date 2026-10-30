@@ -8,6 +8,8 @@ use crate::analyzer::{FFT_SIZE, SAMPLE_RATE};
 
 pub struct MicInput {
     ring: Arc<Mutex<VecDeque<f32>>>,
+    /// samples since the last `take_new` (at most a second), for the drum detector
+    fresh: Arc<Mutex<Vec<f32>>>,
     _stream: cpal::Stream,
     pub name: String,
 }
@@ -22,14 +24,19 @@ impl MicInput {
         let ratio = SAMPLE_RATE as f64 / cfg.sample_rate() as f64;
         let ring = Arc::new(Mutex::new(VecDeque::with_capacity(FFT_SIZE * 2)));
         let r = ring.clone();
+        let fresh = Arc::new(Mutex::new(Vec::new()));
+        let fr = fresh.clone();
         let mut phase = 0.0f64;
         let mut prev = 0.0f32;
         // mix down and resample by linear interpolation
         let mut push = move |frames: &mut dyn Iterator<Item = f32>| {
             let mut g = r.lock().unwrap();
+            let mut f = fr.lock().unwrap();
             for v in frames {
                 while phase < 1.0 {
-                    g.push_back(prev + (v - prev) * phase as f32);
+                    let s = prev + (v - prev) * phase as f32;
+                    g.push_back(s);
+                    f.push(s);
                     phase += 1.0 / ratio;
                 }
                 phase -= 1.0;
@@ -37,6 +44,8 @@ impl MicInput {
             }
             let excess = g.len().saturating_sub(FFT_SIZE * 2);
             g.drain(..excess);
+            let excess = f.len().saturating_sub(SAMPLE_RATE as usize);
+            f.drain(..excess);
         };
         let err = |e: cpal::Error| eprintln!("audio input: {e}");
         let stream = match cfg.sample_format() {
@@ -56,7 +65,12 @@ impl MicInput {
         }
         .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
-        Ok(Self { ring, _stream: stream, name })
+        Ok(Self { ring, fresh, _stream: stream, name })
+    }
+
+    /// The samples recorded since the last call.
+    pub fn take_new(&self) -> Vec<f32> {
+        std::mem::take(&mut *self.fresh.lock().unwrap())
     }
 
     /// The latest `FFT_SIZE` samples (fewer right after opening).

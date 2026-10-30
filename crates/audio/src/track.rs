@@ -2,6 +2,8 @@
 //! output time in the preview and the export alike.
 
 use crate::analyzer::{Analyzer, BINS, HOP, SAMPLE_RATE};
+use crate::onset::{self, DrumHits, DRUMS};
+use phthora_core::modulator::Impulses;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -16,6 +18,11 @@ pub struct AudioTrack {
     /// mono samples at `SAMPLE_RATE`
     pub pcm: Arc<Vec<f32>>,
     pub snapshots: Arc<Vec<[u8; BINS]>>,
+    /// band levels for the drum hits, `onset::FRAME_RATE` frames per second
+    pub bands: Arc<onset::Bands>,
+    /// drum hits picked from `bands` with `sensitivity`
+    pub hits: Arc<DrumHits>,
+    pub sensitivity: f32,
     /// part of the track that is used and looped: start and end in seconds
     pub start: f64,
     pub end: Option<f64>,
@@ -33,7 +40,41 @@ impl AudioTrack {
     pub fn from_pcm(pcm: Vec<f32>) -> Self {
         let mut a = Analyzer::new();
         let snapshots = Arc::new((0..pcm.len().div_ceil(HOP)).map(|k| a.analyze(&pcm[..snapshot_end(k).min(pcm.len())])).collect());
-        Self { pcm: Arc::new(pcm), snapshots, start: 0.0, end: None }
+        let bands = onset::track_bands(&pcm);
+        let hits = onset::pick(&bands, 1.0);
+        Self { pcm: Arc::new(pcm), snapshots, bands: Arc::new(bands), hits: Arc::new(hits), sensitivity: 1.0, start: 0.0, end: None }
+    }
+
+    /// The same track with its drum hits picked again (cheap: the analysis is kept).
+    pub fn with_sensitivity(&self, sensitivity: f32) -> Self {
+        let hits = onset::pick(&self.bands, sensitivity);
+        Self { hits: Arc::new(hits), sensitivity, ..self.clone() }
+    }
+
+    /// The youngest drum hits as seen from output frame `n`: hits inside the frame have age 0,
+    /// and the used part loops, so hits at its end come again before its start.
+    pub fn impulses(&self, n: u64, fps: f64) -> [Impulses; DRUMS] {
+        let span = self.span();
+        let start = self.start.max(0.0);
+        let frame = 1.0 / fps.max(1e-6);
+        let r = (n as f64 / fps.max(1e-6)).rem_euclid(span);
+        // a hit fades to nothing within a few seconds; older ones do not matter
+        const HORIZON: f64 = 4.0;
+        std::array::from_fn(|d| {
+            let mut imp = Impulses::default();
+            let hits = &self.hits.0[d];
+            // hits in the used part, as positions within it
+            let a = hits.partition_point(|h| h.time < start);
+            let b = hits.partition_point(|h| h.time < start + span);
+            for h in &hits[a..b] {
+                let ahead = (h.time - start - r).rem_euclid(span);
+                let age = if ahead < frame { 0.0 } else { span - ahead };
+                if age < HORIZON {
+                    imp.push(age as f32, h.strength);
+                }
+            }
+            imp
+        })
     }
 
     pub fn duration(&self) -> f64 {

@@ -46,6 +46,7 @@ options for render:
   --audio-gain G       level of audio modulators, 0 to 5 (default 1)
   --audio-smoothing S  smoothing of audio modulators, 0 to 1 (default 0.5)
   --no-reduce-noise    do not push quiet audio levels down
+  --audio-sensitivity S  drum hit picking, 0.5 (clear hits) to 2 (default 1)
   --backend B          auto | software | vaapi (MP4 encoder; auto uses VAAPI if it works)
   --list               list effect ids
 batch (several inputs, or --out-dir with one):
@@ -157,6 +158,7 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             "--audio-gain" => audio_settings.gain = parse_num(args, &mut i)? as f32,
             "--audio-smoothing" => audio_settings.smoothing = parse_num(args, &mut i)? as f32,
             "--no-reduce-noise" => audio_settings.reduce_noise = false,
+            "--audio-sensitivity" => audio_settings.sensitivity = parse_num(args, &mut i)? as f32,
             "--list" => {
                 use std::io::Write;
                 let mut out = std::io::stdout().lock();
@@ -200,6 +202,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
     }
     if !(0.0..=5.0).contains(&audio_settings.gain) || !(0.0..=1.0).contains(&audio_settings.smoothing) {
         return Err("--audio-gain must be 0 to 5, --audio-smoothing 0 to 1".into());
+    }
+    if !(0.5..=2.0).contains(&audio_settings.sensitivity) {
+        return Err("--audio-sensitivity must be 0.5 to 2".into());
     }
     if !(Playback::MIN_SPEED..=Playback::MAX_SPEED).contains(&playback.speed) {
         return Err(format!("--speed must be between {} and {}", Playback::MIN_SPEED, Playback::MAX_SPEED));

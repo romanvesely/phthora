@@ -47,11 +47,13 @@ pub struct AudioSettings {
     pub reduce_noise: bool,
     /// extra bands after all/low/mid/hi
     pub custom: Vec<BandDef>,
+    /// drum hit picking: 0.5 (only clear hits) ..= 2 (also doubtful ones)
+    pub sensitivity: f32,
 }
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { gain: 1.0, smoothing: 0.5, reduce_noise: true, custom: Vec::new() }
+        Self { gain: 1.0, smoothing: 0.5, reduce_noise: true, custom: Vec::new(), sensitivity: 1.0 }
     }
 }
 

@@ -163,6 +163,9 @@ pub fn render_frames(ctx: &GpuContext, job: &ExportJob, progress: &Progress, mut
         for (k, v) in lv.bands.iter().take(live.audio.len()).enumerate() {
             live.audio[k] = *v;
         }
+        if let Some(t) = &job.audio_track {
+            live.drums = t.impulses(i, timing.fps);
+        }
         engine.audio_spectrum.clone_from(&lv.spectrum);
         let resolved = job.chain.resolve(&ft, &live, &job.midi);
         engine.render(&resolved, &ft);

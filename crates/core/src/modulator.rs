@@ -51,6 +51,12 @@ pub enum Band {
     Hi,
     /// user band n (0-based) from the audio settings
     Custom(u8),
+    /// drum hits found in the audio: kick drum, snare, hi-hat
+    Kick,
+    Snare,
+    Hihat,
+    /// a pulse on every beat of the tempo (a quarter of an effect loop)
+    Beat,
 }
 
 /// Built-in bands plus user bands.
@@ -58,7 +64,24 @@ pub const MAX_BANDS: usize = 8;
 
 impl Band {
     pub const BUILTIN: [Band; 4] = [Band::All, Band::Low, Band::Mid, Band::Hi];
+    pub const PULSES: [Band; 4] = [Band::Kick, Band::Snare, Band::Hihat, Band::Beat];
 
+    /// Kick, snare, hi-hat: index into `LiveInputs::drums`.
+    pub fn drum(self) -> Option<usize> {
+        match self {
+            Band::Kick => Some(0),
+            Band::Snare => Some(1),
+            Band::Hihat => Some(2),
+            _ => None,
+        }
+    }
+
+    /// Bands that give pulses (sharp attack, `decay` afterwards) rather than levels.
+    pub fn is_pulse(self) -> bool {
+        Band::PULSES.contains(&self)
+    }
+
+    /// Index into `LiveInputs::audio` (pulse bands have none and read 0).
     pub fn index(self) -> usize {
         match self {
             Band::All => 0,
@@ -66,6 +89,7 @@ impl Band {
             Band::Mid => 2,
             Band::Hi => 3,
             Band::Custom(n) => (4 + n as usize).min(MAX_BANDS - 1),
+            Band::Kick | Band::Snare | Band::Hihat | Band::Beat => 0,
         }
     }
 
@@ -76,6 +100,10 @@ impl Band {
             Band::Mid => "mid".into(),
             Band::Hi => "hi".into(),
             Band::Custom(n) => format!("custom{}", n as u32 + 1),
+            Band::Kick => "kick".into(),
+            Band::Snare => "snare".into(),
+            Band::Hihat => "hihat".into(),
+            Band::Beat => "beat".into(),
         }
     }
 
@@ -85,6 +113,10 @@ impl Band {
             "low" => Band::Low,
             "mid" => Band::Mid,
             "hi" => Band::Hi,
+            "kick" => Band::Kick,
+            "snare" => Band::Snare,
+            "hihat" => Band::Hihat,
+            "beat" => Band::Beat,
             _ => Band::Custom(s.strip_prefix("custom")?.parse::<u8>().ok()?.checked_sub(1)?),
         })
     }
@@ -126,6 +158,15 @@ pub struct Modulator {
     pub midi_device: String,
     /// (time 0..1, value 0..1), sorted by time
     pub keyframes: Vec<[f64; 2]>,
+    /// pulse bands (drums, beat): seconds for a hit to fade to a third
+    #[serde(default = "default_decay")]
+    pub decay: f64,
+}
+
+pub const DEFAULT_DECAY: f64 = 0.15;
+
+fn default_decay() -> f64 {
+    DEFAULT_DECAY
 }
 
 impl Default for Modulator {
@@ -145,7 +186,42 @@ impl Default for Modulator {
             midi_cc: None,
             midi_device: String::new(),
             keyframes: Vec::new(),
+            decay: DEFAULT_DECAY,
         }
+    }
+}
+
+/// How many recent hits per drum a modulator sees.
+pub const RECENT: usize = 4;
+
+/// The latest hits of one drum as seen from the current frame: (age in seconds, strength 0..1).
+/// A hit inside the current frame has age 0. Unused entries have strength 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Impulses {
+    pub recent: [(f32, f32); RECENT],
+}
+
+impl Impulses {
+    /// Keep the hit if it is one of the `RECENT` youngest.
+    pub fn push(&mut self, age: f32, strength: f32) {
+        if strength <= 0.0 {
+            return;
+        }
+        // replace an empty slot or the oldest hit
+        let i = (0..RECENT).max_by(|&a, &b| {
+            let key = |i: usize| if self.recent[i].1 <= 0.0 { f32::INFINITY } else { self.recent[i].0 };
+            key(a).total_cmp(&key(b))
+        }).unwrap();
+        let slot = self.recent[i];
+        if slot.1 <= 0.0 || age < slot.0 {
+            self.recent[i] = (age, strength);
+        }
+    }
+
+    /// Instant attack, exponential release: the strongest of the decaying hits.
+    pub fn envelope(&self, decay: f64) -> f32 {
+        let d = decay.max(0.005) as f32;
+        self.recent.iter().map(|&(age, s)| s * (-age.max(0.0) / d).exp()).fold(0.0, f32::max)
     }
 }
 
@@ -154,6 +230,8 @@ impl Default for Modulator {
 pub struct LiveInputs {
     /// audio band levels 0..1 (all, low, mid, hi, user bands)
     pub audio: [f32; MAX_BANDS],
+    /// recent drum hits: kick, snare, hi-hat
+    pub drums: [Impulses; 3],
     /// true when there is no meaningful duration (webcam/mic live): start/end disabled
     pub live: bool,
 }
@@ -179,7 +257,16 @@ impl Modulator {
             Shape::Step => tm.round(),
             Shape::Rand => random1d((t.export_duration * t.export_progress * self.speed * 4.0).floor() + self.seed),
             Shape::Noise => loop_noise1d(t.export_progress, self.speed * t.export_duration / 16.0, self.seed) / 2.0 + 0.5,
-            Shape::Audio => inputs.audio[self.band.index()] as f64,
+            Shape::Audio => match self.band {
+                Band::Beat => {
+                    let age = (t.loop_progress * 4.0).rem_euclid(1.0) * t.beat_len;
+                    (-age / self.decay.max(0.005)).exp()
+                }
+                b => match b.drum() {
+                    Some(i) => inputs.drums[i].envelope(self.decay) as f64,
+                    None => inputs.audio[b.index()] as f64,
+                },
+            },
             Shape::Const => self.max,
             Shape::Midi | Shape::Keys => unreachable!(),
         };
@@ -237,6 +324,46 @@ pub fn keyframe_value(points: &[[f64; 2]], t: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::clock::TimingSettings;
+
+    #[test]
+    fn drum_bands_and_decay_survive_saving() {
+        for b in Band::PULSES {
+            let src = Modulator { band: b, decay: 0.07, ..m(Shape::Audio) };
+            let back: Modulator = serde_json::from_str(&serde_json::to_string(&src).unwrap()).unwrap();
+            assert_eq!(back, src);
+        }
+        // older presets have no decay
+        let mut v = serde_json::to_value(m(Shape::Audio)).unwrap();
+        v.as_object_mut().unwrap().remove("decay");
+        let back: Modulator = serde_json::from_value(v).unwrap();
+        assert_eq!(back.decay, DEFAULT_DECAY);
+    }
+
+    #[test]
+    fn impulses_keep_the_youngest_hits() {
+        let mut imp = Impulses::default();
+        assert_eq!(imp.envelope(0.1), 0.0);
+        for (age, s) in [(0.9, 1.0), (0.5, 0.4), (0.3, 0.8), (0.7, 1.0), (0.0, 0.5)] {
+            imp.push(age, s);
+        }
+        // the oldest (0.9) made room for the newest
+        assert!(imp.recent.iter().all(|h| h.0 < 0.8));
+        assert!((imp.envelope(0.1) - 0.5).abs() < 1e-6);
+        // with a long decay the strong hit 0.7 s ago is still above the weak new one
+        assert!((imp.envelope(10.0) - (-0.07f32).exp()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn drum_pulses_read_their_drum() {
+        let mut li = LiveInputs::default();
+        li.drums[1].push(0.0, 0.9);
+        let t = TimingSettings::default().at_frame(0);
+        let v = |b: Band| Modulator { band: b, ..m(Shape::Audio) }.eval_normalized(&t, &li, None).unwrap();
+        assert!((v(Band::Snare) - 0.9).abs() < 1e-6);
+        assert_eq!(v(Band::Kick), 0.0);
+        // on the beat: a full pulse
+        assert!((v(Band::Beat) - 1.0).abs() < 1e-6);
+    }
 
     fn m(shape: Shape) -> Modulator {
         Modulator { enabled: true, shape, seed: 1.0, ..Default::default() }

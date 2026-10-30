@@ -385,6 +385,14 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, kx: &KeyCtx,
                     for b in bands {
                         ui.selectable_value(&mut m.band, b, b.name());
                     }
+                    ui.separator();
+                    for b in Band::PULSES {
+                        ui.selectable_value(&mut m.band, b, b.name()).on_hover_text(if b == Band::Beat {
+                            "A pulse on every beat of the tempo (BPM in the settings)"
+                        } else {
+                            "A pulse on every hit of this drum, fading over the decay"
+                        });
+                    }
                 });
             } else if m.shape == Shape::Midi {
                 let text = match m.midi_cc {
@@ -442,8 +450,17 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, kx: &KeyCtx,
             // the controller value maps straight onto the parameter range
         } else {
             egui::Grid::new(id.with("grid")).num_columns(4).spacing([6.0, 2.0]).show(ui, |ui| {
-                ui.label("speed");
-                if m.shape == Shape::Audio {
+                if m.shape == Shape::Audio && m.band.is_pulse() {
+                    ui.label("decay");
+                    let mut ms = (m.decay * 1000.0).round();
+                    if ui.add(egui::DragValue::new(&mut ms).range(10.0..=2000.0).speed(2.0).suffix(" ms")).on_hover_text("How fast a pulse fades").changed() {
+                        m.decay = ms / 1000.0;
+                    }
+                } else {
+                    ui.label("speed");
+                }
+                if m.shape == Shape::Audio && m.band.is_pulse() {
+                } else if m.shape == Shape::Audio {
                     ui.label("–");
                 } else if m.looped {
                     egui::ComboBox::from_id_salt(id.with("speed")).selected_text(format!("{}", m.speed)).width(50.0).show_ui(ui, |ui| {

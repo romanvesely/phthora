@@ -37,11 +37,22 @@ pub struct FrameTime {
     pub export_duration: f64,
     /// frame index since output start (counts during preview too)
     pub frame: u64,
+    /// seconds per beat: a quarter of an effect loop
+    pub beat_len: f64,
 }
 
 impl TimingSettings {
     pub fn frame_count(&self) -> u64 {
         ((self.fps * self.duration).round() as u64).max(1)
+    }
+
+    /// Length of one effect loop in seconds: a 4/4 bar with a tempo, else the output split
+    /// into equal loops of at most `MAX_LOOP_DURATION`.
+    pub fn loop_duration(&self) -> f64 {
+        match self.bpm.filter(|b| *b > 0.0) {
+            Some(bpm) => 60.0 / bpm * 4.0,
+            None => self.duration / (self.duration / MAX_LOOP_DURATION).ceil().max(1.0),
+        }
     }
 
     pub fn loop_progress(&self, export_progress: f64) -> f64 {
@@ -76,6 +87,7 @@ impl TimingSettings {
             export_time: p * self.duration,
             export_duration: self.duration,
             frame,
+            beat_len: self.loop_duration() / 4.0,
         }
     }
 }

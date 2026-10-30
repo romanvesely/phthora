@@ -3186,6 +3186,7 @@ version = "1.0.0"
 dependencies = [
  "cpal",
  "midir",
+ "phthora-core",
  "phthora-media",
  "rustfft",
  "serde",

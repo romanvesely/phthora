@@ -192,6 +192,9 @@ mod tests {
         // an audio-driven parameter on the first effect
         let fb = chain.effects[0].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
         chain.effects[0].modulators.insert(fb, Modulator { enabled: true, shape: Shape::Audio, band: Band::Low, seed: 2.0, ..Default::default() });
+        // and one driven by kick hits
+        let rs = chain.effects[3].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
+        chain.effects[3].modulators.insert(rs, Modulator { enabled: true, shape: Shape::Audio, band: Band::Kick, decay: 0.08, ..Default::default() });
         // a MIDI-mapped parameter holds the value it had when the export started
         let dm = chain.effects[2].desc.params.iter().find(|p| p.is_float()).unwrap().key.clone();
         chain.effects[2].modulators.insert(dm, Modulator { enabled: true, shape: Shape::Midi, midi_cc: Some(21), midi_device: "knobs".into(), ..Default::default() });
@@ -242,6 +245,7 @@ mod tests {
         let mut preview = Preview::default();
         let mut levels = FrameLevels::default();
         let mut audio_moved = false;
+        let mut drums_moved = false;
         for n in 0..total {
             let ft = timing.at_frame(n);
             let mut live = LiveInputs::default();
@@ -249,6 +253,8 @@ mod tests {
             for (k, v) in lv.bands.iter().take(4).enumerate() {
                 live.audio[k] = *v;
             }
+            live.drums = track.impulses(n, timing.fps);
+            drums_moved |= live.drums[0].envelope(0.1) > 0.5;
             engine.audio_spectrum.clone_from(&lv.spectrum);
             audio_moved |= live.audio[1] > 0.05;
             loop {
@@ -267,6 +273,7 @@ mod tests {
             assert!(px == exported[n as usize], "preview frame {n} differs from the export");
         }
         assert!(audio_moved, "the audio modulator never moved");
+        assert!(drums_moved, "the kick modulator never moved");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

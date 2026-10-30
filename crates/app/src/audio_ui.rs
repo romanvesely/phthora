@@ -2,8 +2,8 @@
 //! preview playback (the preview clock while it plays) and live microphone input.
 
 use eframe::egui;
-use phthora_audio::{Analyzer, AudioSettings, AudioTrack, BandDef, Follower, FrameLevels, MicInput, Player, Program};
-use phthora_core::modulator::{LiveInputs, MAX_BANDS};
+use phthora_audio::{Analyzer, AudioSettings, AudioTrack, BandDef, Follower, FrameLevels, LiveDrums, MicInput, Player, Program};
+use phthora_core::modulator::{Impulses, LiveInputs, MAX_BANDS};
 use phthora_media::AudioSource;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +39,12 @@ pub struct AudioState {
     analyzer: Analyzer,
     live: Follower,
     frames: FrameLevels,
+    /// drum hits of the microphone, their ages counted on the wall clock
+    mic_drums: LiveDrums,
+    mic_hits: [Impulses; 3],
+    mic_time: Option<std::time::Instant>,
+    /// current envelope of each drum with a short decay (lamps)
+    pub drum_lamps: [f32; 3],
     /// current level of the "all" band (meter)
     pub meter: f32,
     pub spectrum: Vec<f32>,
@@ -66,6 +72,10 @@ impl AudioState {
             analyzer: Analyzer::new(),
             live: Follower::default(),
             frames: FrameLevels::default(),
+            mic_drums: LiveDrums::default(),
+            mic_hits: Default::default(),
+            mic_time: None,
+            drum_lamps: [0.0; 3],
             meter: 0.0,
             spectrum: Vec::new(),
             envelope: None,
@@ -111,6 +121,9 @@ impl AudioState {
             _ => trim,
         };
         if let Some(t) = &mut self.track {
+            if t.sensitivity != self.settings.sensitivity {
+                *t = t.with_sensitivity(self.settings.sensitivity);
+            }
             t.start = start;
             t.end = end;
         }
@@ -124,6 +137,9 @@ impl AudioState {
             }
         } else if self.src != Src::Mic {
             self.mic = None;
+            self.mic_drums = LiveDrums::default();
+            self.mic_hits = Default::default();
+            self.mic_time = None;
         }
     }
 
@@ -174,6 +190,24 @@ impl AudioState {
         for (i, v) in levels.bands.iter().take(MAX_BANDS).enumerate() {
             li.audio[i] = *v;
         }
+        li.drums = match &self.mic {
+            Some(m) => {
+                let now = std::time::Instant::now();
+                let dt = self.mic_time.map_or(0.0, |t| (now - t).as_secs_f32());
+                self.mic_time = Some(now);
+                for imp in &mut self.mic_hits {
+                    for h in &mut imp.recent {
+                        h.0 += dt;
+                    }
+                }
+                for (d, age, s) in self.mic_drums.feed(&m.take_new(), self.settings.sensitivity) {
+                    self.mic_hits[d].push(age, s);
+                }
+                self.mic_hits
+            }
+            None => self.track.as_ref().map(|t| t.impulses(n, fps)).unwrap_or_default(),
+        };
+        self.drum_lamps = li.drums.map(|d| d.envelope(0.08));
         li
     }
 
@@ -264,6 +298,18 @@ impl AudioState {
                 ui.end_row();
                 ui.label("Reduce noise");
                 ui.checkbox(&mut self.settings.reduce_noise, "").on_hover_text("Quiet signals are pushed down, loud ones up");
+                ui.end_row();
+                ui.label("Drums");
+                ui.horizontal(|ui| {
+                    for (name, v) in ["K", "S", "H"].into_iter().zip(self.drum_lamps) {
+                        let (r, p) = ui.allocate_painter(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        let c = egui::Color32::from_gray(50).lerp_to_gamma(egui::Color32::from_rgb(120, 220, 160), v.clamp(0.0, 1.0));
+                        p.circle_filled(r.rect.center(), 7.0, c);
+                        p.text(r.rect.center(), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(9.0), egui::Color32::from_gray(if v > 0.5 { 20 } else { 200 }));
+                    }
+                    ui.add(egui::Slider::new(&mut self.settings.sensitivity, 0.5..=2.0).step_by(0.05).text("sensitivity"))
+                        .on_hover_text("Lower: only clear kick, snare and hi-hat hits. Higher: quieter ones too.");
+                });
                 ui.end_row();
                 ui.label("Preview");
                 ui.checkbox(&mut self.muted, "mute");

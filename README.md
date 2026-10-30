@@ -173,6 +173,7 @@ phthora render INPUT... --out-dir DIR [options]
   --audio-gain G       level of audio modulators, 0 to 5 (default 1)
   --audio-smoothing S  smoothing of audio modulators, 0 to 1 (default 0.5)
   --no-reduce-noise    do not push quiet audio levels down
+  --audio-sensitivity S  drum hit picking, 0.5 (clear hits) to 2 (default 1)
   --backend B          auto | software | vaapi (MP4 encoder)
   --list               list effect ids
 

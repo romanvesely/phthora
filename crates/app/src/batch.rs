@@ -150,7 +150,7 @@ pub fn build_job(sh: &Shared, ov: &Overrides, input: Option<&Path>, info: Option
     };
     let audio_track = match &audio {
         Some(a) => {
-            let mut t = phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?;
+            let mut t = phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?.with_sensitivity(sh.audio_settings.sensitivity);
             t.start = a.start;
             t.end = a.end;
             Some(t)
