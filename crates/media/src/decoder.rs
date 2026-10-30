@@ -12,7 +12,7 @@ use std::thread::JoinHandle;
 use crate::error::{MediaError, Result};
 use crate::image::decode_still;
 use crate::probe::{MediaInfo, MediaKind};
-use crate::util::{StderrTail, fps_arg, ffmpeg_cmd, require_ffmpeg, secs_arg};
+use crate::util::{StderrTail, fps_arg, ffmpeg_cmd, passthrough_args, require_ffmpeg, secs_arg};
 
 #[derive(Debug, Clone)]
 pub struct DecodeOptions {
@@ -296,7 +296,8 @@ fn build_args(job: &Job) -> Vec<String> {
     if !vf.is_empty() {
         a.extend(["-vf".into(), vf.join(",")]);
     }
-    a.extend(["-pix_fmt", "rgba", "-fps_mode", "passthrough"].map(String::from));
+    a.extend(["-pix_fmt", "rgba"].map(String::from));
+    a.extend(passthrough_args().map(String::from));
     if let Some(n) = job.planned {
         a.extend(["-frames:v".into(), n.to_string()]);
     } else if let Some(end) = job.opts.end {

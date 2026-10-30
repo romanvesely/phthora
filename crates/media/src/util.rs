@@ -67,6 +67,26 @@ pub(crate) fn tool(bin: &str) -> Command {
     c
 }
 
+/// The option that passes frames through without duplicating or dropping them:
+/// `-fps_mode` since ffmpeg 5.1, before that `-vsync` (gone in ffmpeg 8).
+pub(crate) fn passthrough_args() -> [&'static str; 2] {
+    static OLD: OnceLock<bool> = OnceLock::new();
+    let old = *OLD.get_or_init(|| {
+        let out = tool("ffmpeg").arg("-version").stdin(std::process::Stdio::null()).output();
+        out.ok().and_then(|o| version(&String::from_utf8_lossy(&o.stdout))).is_some_and(|v| v < (5, 1))
+    });
+    [if old { "-vsync" } else { "-fps_mode" }, "passthrough"]
+}
+
+/// Major and minor version from the first line of `ffmpeg -version`
+/// ("ffmpeg version 4.4.2-0ubuntu0.22.04.1", "… n9.0.2"); None for git builds ("N-12345-g…").
+fn version(text: &str) -> Option<(u32, u32)> {
+    let v = text.lines().next()?.split_whitespace().nth(2)?;
+    let mut nums = v.trim_start_matches('n').split(|c: char| !c.is_ascii_digit());
+    let major = nums.next()?.parse().ok()?;
+    Some((major, nums.next().and_then(|m| m.parse().ok()).unwrap_or(0)))
+}
+
 /// Base ffmpeg command: quiet, errors only.
 pub(crate) fn ffmpeg_cmd() -> Command {
     let mut c = tool("ffmpeg");
@@ -133,5 +153,19 @@ impl StderrTail {
             let _ = h.join();
         }
         self.snapshot()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version;
+
+    #[test]
+    fn ffmpeg_versions() {
+        assert_eq!(version("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021"), Some((4, 4)));
+        assert_eq!(version("ffmpeg version n9.0.2 Copyright (c) 2000-2026"), Some((9, 0)));
+        assert_eq!(version("ffmpeg version 5.1 Copyright"), Some((5, 1)));
+        assert_eq!(version("ffmpeg version N-117721-g5a1b2c3 Copyright"), None);
+        assert_eq!(version(""), None);
     }
 }
