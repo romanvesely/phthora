@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{ChildStderr, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -33,10 +34,30 @@ pub(crate) fn require_ffmpeg() -> crate::Result<()> {
     }
 }
 
+/// Where ffmpeg or ffprobe is: in `$PHTHORA_FFMPEG_DIR`, next to the executable (or in
+/// `ffmpeg/` beside it), in a macOS app bundle's `Resources/ffmpeg`, else found on PATH.
+fn locate(bin: &str) -> PathBuf {
+    let file = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PHTHORA_FFMPEG_DIR").map(PathBuf::from).into_iter().collect();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(d) = exe.parent()
+    {
+        dirs.extend([d.to_path_buf(), d.join("ffmpeg"), d.join("../Resources/ffmpeg")]);
+    }
+    dirs.into_iter().map(|d| d.join(&file)).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(bin))
+}
+
 /// A command for an external tool; on Windows it gets no console window of its own.
 pub(crate) fn tool(bin: &str) -> Command {
+    static FFMPEG: OnceLock<PathBuf> = OnceLock::new();
+    static FFPROBE: OnceLock<PathBuf> = OnceLock::new();
+    let path = match bin {
+        "ffmpeg" => FFMPEG.get_or_init(|| locate(bin)).clone(),
+        "ffprobe" => FFPROBE.get_or_init(|| locate(bin)).clone(),
+        _ => PathBuf::from(bin),
+    };
     #[allow(unused_mut)]
-    let mut c = Command::new(bin);
+    let mut c = Command::new(path);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -50,6 +50,8 @@ pub fn find_asset_dir() -> Option<PathBuf> {
         && let Some(d) = exe.parent() {
             cands.push(d.join("assets"));
             cands.push(d.join("../share/phthora/assets"));
+            // macOS app bundle: Contents/MacOS/phthora, Contents/Resources/assets
+            cands.push(d.join("../Resources/assets"));
             cands.push(d.join("../../assets"));
         }
     cands.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets")));

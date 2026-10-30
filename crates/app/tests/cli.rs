@@ -301,7 +301,12 @@ fn version() {
     for flag in ["--version", "-V"] {
         let out = run(bin().arg(flag));
         assert!(out.status.success());
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("phthora {}", env!("CARGO_PKG_VERSION")));
+        // "phthora 1.1.0 (2026-10-30 abc1234)"
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let rest = s.strip_prefix(&format!("phthora {} (", env!("CARGO_PKG_VERSION"))).unwrap_or_else(|| panic!("{s}"));
+        let (date, commit) = rest.trim_end_matches(')').split_once(' ').unwrap();
+        assert!(date.len() == 10 && date.as_bytes()[4] == b'-', "{s}");
+        assert!(commit == "unknown" || commit.len() == 7, "{s}");
     }
 }
 

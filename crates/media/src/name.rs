@@ -68,41 +68,10 @@ fn civil(t: i64) -> (i64, u32, u32, u32, u32, u32) {
     (y, m, d, rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-#[cfg(unix)]
+/// Offset of the local time zone from UTC at `t`, in seconds.
 fn local_offset_secs(t: i64) -> i64 {
-    use std::os::raw::{c_char, c_int, c_long};
-    #[repr(C)]
-    struct Tm {
-        tm_sec: c_int,
-        tm_min: c_int,
-        tm_hour: c_int,
-        tm_mday: c_int,
-        tm_mon: c_int,
-        tm_year: c_int,
-        tm_wday: c_int,
-        tm_yday: c_int,
-        tm_isdst: c_int,
-        tm_gmtoff: c_long,
-        tm_zone: *const c_char,
-    }
-    unsafe extern "C" {
-        fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm;
-    }
-    // SAFETY: Tm matches the glibc/musl/BSD `struct tm` layout; localtime_r
-    // only writes into the buffer we pass.
-    unsafe {
-        let mut tm: Tm = std::mem::zeroed();
-        if localtime_r(&t, &mut tm).is_null() {
-            0
-        } else {
-            tm.tm_gmtoff as i64
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn local_offset_secs(_t: i64) -> i64 {
-    0
+    use chrono::{Offset, TimeZone};
+    chrono::Local.timestamp_opt(t, 0).single().map_or(0, |d| d.offset().fix().local_minus_utc() as i64)
 }
 
 #[cfg(test)]

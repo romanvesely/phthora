@@ -1,4 +1,6 @@
 //! phthora: real-time GPU effect mixer for images, video and GIFs.
+// no console window behind the editor on Windows; the command line attaches to its caller's
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod audio_ui;
@@ -337,14 +339,28 @@ fn cli_batch(inputs: &[PathBuf], out_dir: &std::path::Path, shared: &Shared, ov:
     Err(format!("{} of {} inputs failed:\n{}", report.failed.len(), inputs.len(), list.join("\n")))
 }
 
+/// Print into the console the program was started from (Windows: a GUI program has none).
+#[cfg(windows)]
+fn attach_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    // SAFETY: plain Win32 call without pointers; failing (no parent console) is harmless
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if args.first().is_some_and(|a| matches!(a.as_str(), "render" | "-h" | "--help" | "-V" | "--version")) {
+        attach_console();
+    }
     if args.first().map(|a| a == "-h" || a == "--help").unwrap_or(false) {
         println!("{USAGE}");
         return;
     }
     if args.first().map(|a| a == "-V" || a == "--version").unwrap_or(false) {
-        println!("phthora {}", env!("CARGO_PKG_VERSION"));
+        println!("phthora {} ({} {})", env!("CARGO_PKG_VERSION"), env!("PHTHORA_BUILD_DATE"), env!("PHTHORA_COMMIT"));
         return;
     }
     if args.first().map(|a| a == "render").unwrap_or(false) {

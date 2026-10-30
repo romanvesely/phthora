@@ -77,7 +77,7 @@ use std::os::unix::fs::OpenOptionsExt;
 /// Input options for a camera: 1280x720 MJPEG if offered (raw YUYV is slow at that size
 /// over USB), else the camera's default mode.
 fn capture_args(dev: &Path) -> Vec<String> {
-    let out = std::process::Command::new("ffmpeg")
+    let out = crate::util::tool("ffmpeg")
         .args(["-hide_banner", "-f", "v4l2", "-list_formats", "all", "-i"])
         .arg(dev)
         .stdin(Stdio::null())

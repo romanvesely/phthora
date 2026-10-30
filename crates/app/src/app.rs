@@ -286,6 +286,14 @@ impl PhthoraApp {
         }
         let flag = app.vaapi.clone();
         std::thread::spawn(move || flag.store(phthora_media::vaapi_available(), Ordering::Relaxed));
+        if !phthora_media::ffmpeg_available() {
+            let how = if cfg!(target_os = "linux") {
+                "Install it with your package manager (for example: sudo apt install ffmpeg, sudo pacman -S ffmpeg, sudo dnf install ffmpeg)."
+            } else {
+                "It comes with phthora: keep ffmpeg next to the program, as it is in the download."
+            };
+            app.error("ffmpeg not found", format!("phthora reads and writes video with ffmpeg and ffprobe. {how}\nImages and effects work without it; video, GIF and audio do not."));
+        }
         app
     }
 
