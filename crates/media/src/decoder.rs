@@ -110,7 +110,7 @@ impl Decoder {
             None => None,
         };
         let still = if is_image {
-            let img = decode_still(path, info.width, info.height, out_w, out_h)?;
+            let img = decode_still(path, info.width, info.height, info.rotation, out_w, out_h)?;
             Some(img.data)
         } else {
             None

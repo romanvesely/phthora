@@ -49,6 +49,7 @@ pub(crate) struct RawProbe {
 #[derive(Deserialize, Default)]
 pub(crate) struct RawFrame {
     pub side_data_list: Option<Vec<RawSideData>>,
+    pub tags: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -98,7 +99,7 @@ pub(crate) fn run_ffprobe(path: &Path) -> Result<RawProbe> {
 
 fn first_frame_probe(path: &Path) -> Result<RawProbe> {
     let out = tool("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_frames", "-show_entries", "frame=side_data_list", "-of", "json"])
+        .args(["-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1", "-show_frames", "-show_entries", "frame=side_data_list:frame_tags=Orientation", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())
         .output()?;
@@ -124,12 +125,12 @@ fn parse_secs(s: Option<&str>) -> Option<f64> {
 }
 
 /// Clockwise display rotation in degrees, normalized to 0/90/180/270.
-fn rotation_of(s: &RawStream, frame_side_data: Option<&Vec<RawSideData>>) -> i32 {
+fn rotation_of(s: &RawStream, frame: Option<&RawFrame>) -> i32 {
     // Display matrix: counter-clockwise angle, so negate for clockwise.
     let cw = s
         .side_data_list
         .as_ref()
-        .or(frame_side_data)
+        .or(frame.and_then(|f| f.side_data_list.as_ref()))
         .and_then(|l| l.iter().find_map(|d| d.rotation))
         .map(|r| -r)
         .or_else(|| {
@@ -137,6 +138,13 @@ fn rotation_of(s: &RawStream, frame_side_data: Option<&Vec<RawSideData>>) -> i32
                 .as_ref()
                 .and_then(|t| t.get("rotate"))
                 .and_then(|v| v.parse::<f64>().ok())
+        })
+        // ffmpeg before 6.1 gives a still's EXIF orientation only as a tag ("    6"; mirrored ones keep their turn)
+        .or_else(|| match frame?.tags.as_ref()?.get("Orientation")?.trim() {
+            "3" | "4" => Some(180.0),
+            "5" | "6" => Some(90.0),
+            "7" | "8" => Some(270.0),
+            _ => None,
         });
     let deg = cw.unwrap_or(0.0);
     let quarter = (deg / 90.0).round() as i32;
@@ -195,7 +203,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
     } else {
         None
     };
-    let rotation = rotation_of(video, frame_rot.as_ref().and_then(|f| f.frames.first()).and_then(|f| f.side_data_list.as_ref()));
+    let rotation = rotation_of(video, frame_rot.as_ref().and_then(|f| f.frames.first()));
     let (width, height) = if rotation == 90 || rotation == 270 { (ch, cw) } else { (cw, ch) };
 
     if kind == MediaKind::Image {

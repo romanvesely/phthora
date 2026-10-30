@@ -15,22 +15,32 @@ pub struct RgbaImage {
 }
 
 /// Decode the first frame of `path` to RGBA, scaled via [`fit_size`] so the
-/// longer side is at most `max_dim` (sizes are made even). EXIF/display
-/// rotation is applied by ffmpeg.
+/// longer side is at most `max_dim` (sizes are made even), turned upright by its
+/// EXIF/display rotation.
 pub fn load_image(path: &Path, max_dim: u32) -> Result<RgbaImage> {
     let info = probe(path)?;
     let (w, h) = fit_size(info.width, info.height, max_dim);
-    decode_still(path, info.width, info.height, w, h)
+    decode_still(path, info.width, info.height, info.rotation, w, h)
 }
 
 /// Decode one frame at `(w, h)`; `(src_w, src_h)` is the display size, used to
-/// skip the scaler when sizes already match.
-pub(crate) fn decode_still(path: &Path, src_w: u32, src_h: u32, w: u32, h: u32) -> Result<RgbaImage> {
+/// skip the scaler when sizes already match. The rotation (clockwise, from [`probe`]) is
+/// applied here, not by ffmpeg: before 6.1 ffmpeg ignored the EXIF orientation of stills.
+pub(crate) fn decode_still(path: &Path, src_w: u32, src_h: u32, rotation: i32, w: u32, h: u32) -> Result<RgbaImage> {
     require_ffmpeg()?;
     let mut cmd = ffmpeg_cmd();
-    cmd.arg("-nostdin").arg("-i").arg(path).args(["-map", "0:v:0", "-an", "-sn", "-frames:v", "1"]);
+    cmd.args(["-nostdin", "-noautorotate", "-i"]).arg(path).args(["-map", "0:v:0", "-an", "-sn", "-frames:v", "1"]);
+    let mut vf: Vec<String> = match rotation {
+        90 => vec!["transpose=clock".into()],
+        180 => vec!["hflip,vflip".into()],
+        270 => vec!["transpose=cclock".into()],
+        _ => vec![],
+    };
     if (w, h) != (src_w, src_h) {
-        cmd.args(["-vf", &format!("scale={w}:{h}")]);
+        vf.push(format!("scale={w}:{h}"));
+    }
+    if !vf.is_empty() {
+        cmd.args(["-vf", &vf.join(",")]);
     }
     cmd.args(["-pix_fmt", "rgba", "-f", "rawvideo", "-"]);
     let mut child = cmd
