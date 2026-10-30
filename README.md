@@ -32,7 +32,7 @@ video, GIF, animated WebP, APNG, image sequence or still.
 
 | System | Download | Notes |
 |---|---|---|
-| **Linux** (x86_64) | [AppImage](https://github.com/romanvesely/phthora/releases/latest) · [tar.gz](https://github.com/romanvesely/phthora/releases/latest) | Needs `ffmpeg` from your distribution. Make the AppImage executable (`chmod +x`) and start it. |
+| **Linux** (x86_64) | [AppImage](https://github.com/romanvesely/phthora/releases/latest) · [tar.gz](https://github.com/romanvesely/phthora/releases/latest) | Needs `ffmpeg` (4.4 or newer) from your distribution. Make the AppImage executable (`chmod +x`) and start it. |
 | **Windows** 10/11 (x64) | [zip](https://github.com/romanvesely/phthora/releases/latest) | ffmpeg included. Unzip, start `phthora.exe`. SmartScreen: *More info → Run anyway*. |
 | **macOS** 11+ (Apple Silicon and Intel) | [dmg](https://github.com/romanvesely/phthora/releases/latest) · [zip](https://github.com/romanvesely/phthora/releases/latest) | ffmpeg included. Drag phthora to Applications, then right-click it → *Open* once. |
 
@@ -278,7 +278,7 @@ phthora keeps its files in the usual folders of your system: `~/.local/share/pht
 
 ## Build from source
 
-You need Rust 1.95 or newer, `ffmpeg` and `ffprobe`, and on Linux the ALSA headers
+You need Rust 1.95 or newer, `ffmpeg` and `ffprobe` (4.4 or newer), and on Linux the ALSA headers
 (`libasound2-dev` / `alsa-lib`). The GPU needs Vulkan, Metal or DirectX 12.
 
 ```sh
