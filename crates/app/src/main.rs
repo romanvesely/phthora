@@ -4,6 +4,7 @@ mod app;
 mod audio_ui;
 mod batch;
 mod batch_ui;
+mod icons;
 mod params_ui;
 mod pipeline;
 mod render;

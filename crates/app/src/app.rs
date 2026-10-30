@@ -3,6 +3,7 @@
 use crate::audio_ui::{AudioState, Src};
 use crate::batch::{self, AudioChoice, BackendPref};
 use crate::batch_ui::{self, BatchUi};
+use crate::icons::{self, Icon};
 use phthora_audio::{MidiIn, MidiValues};
 use phthora_gpu::paint::{self, PaintCanvas, PaintKind};
 use phthora_core::orbit::{self, Orbit};
@@ -1179,7 +1180,7 @@ impl PhthoraApp {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            ui.menu_button("☰", |ui| {
+            egui::containers::menu::MenuButton::from_button(icons::menu_button(ui, Icon::Menu)).ui(ui, |ui| {
                 if ui.button("Load default effects").on_hover_text("Every effect, switched off").clicked() {
                     self.load_defaults();
                 }
@@ -1237,11 +1238,12 @@ impl PhthoraApp {
                 if live { self.stop_webcam() } else { self.start_webcam(None) }
             }
             if live {
-                let txt = match self.rec_started {
-                    Some(t) => egui::RichText::new(format!("■ {:.0} s", t.elapsed().as_secs_f64().floor())).color(Color32::from_rgb(240, 90, 90)),
-                    None => egui::RichText::new("● Rec").color(Color32::from_rgb(240, 90, 90)),
+                let red = Color32::from_rgb(240, 90, 90);
+                let b = match self.rec_started {
+                    Some(t) => icons::with_text(Icon::Stop, egui::RichText::new(format!("{:.0} s", t.elapsed().as_secs_f64().floor())).color(red), Some(red)),
+                    None => icons::with_text(Icon::Record, egui::RichText::new("Rec").color(red), Some(red)),
                 };
-                if ui.button(txt).on_hover_text("Record the webcam, then export it with the effects").clicked() {
+                if ui.add(b).on_hover_text("Record the webcam, then export it with the effects").clicked() {
                     self.toggle_recording();
                 }
             }
@@ -1260,7 +1262,7 @@ impl PhthoraApp {
             }
             ui.separator();
             if self.timing.mode == OutputMode::Video && !matches!(self.source, Source::Live(_)) {
-                if ui.button(if self.playing { "⏸" } else { "▶" }).on_hover_text("Space").clicked() {
+                if ui.add(icons::button(ui, if self.playing { Icon::Pause } else { Icon::Play })).on_hover_text("Space").clicked() {
                     self.playing = !self.playing;
                 }
                 let dur = self.timing.duration;
@@ -1294,11 +1296,11 @@ impl PhthoraApp {
             if ui.button("Audio").on_hover_text("Audio source, gain and bands").clicked() {
                 self.audio.open = !self.audio.open;
             }
-            let mute = if self.audio.muted { "🔇" } else { "🔊" };
-            if ui.button(mute).on_hover_text("Mute the preview").clicked() {
+            let mute = if self.audio.muted { Icon::Mute } else { Icon::Unmute };
+            if ui.add(icons::button(ui, mute)).on_hover_text("Mute the preview").clicked() {
                 self.audio.muted = !self.audio.muted;
             }
-            if ui.button("⚙").on_hover_text("Settings").clicked() {
+            if ui.add(icons::button(ui, Icon::Settings)).on_hover_text("Settings").clicked() {
                 self.show_settings = !self.show_settings;
             }
         });
@@ -1313,7 +1315,7 @@ impl PhthoraApp {
             ui.horizontal(|ui| {
                 ui.label("Folder");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("+").on_hover_text("New folder").clicked() {
+                    if ui.add(icons::small(Icon::Plus)).on_hover_text("New folder").clicked() {
                         self.dialog = Some(Dialog::NewFolder(String::new()));
                     }
                     let w = (ui.available_width() - 4.0).max(40.0);
@@ -1336,10 +1338,10 @@ impl PhthoraApp {
                 if ui.small_button("Random").on_hover_text("Random preset (Ctrl+R)").clicked() {
                     self.random_preset();
                 }
-                if ui.small_button("▶").on_hover_text("Next (Ctrl+Right)").clicked() {
+                if ui.add(icons::small(Icon::Next)).on_hover_text("Next (Ctrl+Right)").clicked() {
                     self.step_preset(1);
                 }
-                if ui.small_button("◀").on_hover_text("Previous (Ctrl+Left)").clicked() {
+                if ui.add(icons::small(Icon::Prev)).on_hover_text("Previous (Ctrl+Left)").clicked() {
                     self.step_preset(-1);
                 }
                 let label = self.preset_idx.and_then(|i| self.presets.get(i)).map(|p| store::preset_label(p)).unwrap_or_else(|| "–".into());
@@ -1365,7 +1367,7 @@ impl PhthoraApp {
                 if ui.add_enabled(self.preset_idx.is_some(), egui::Button::new("Delete").small()).clicked() {
                     self.delete_preset();
                 }
-                if ui.add_enabled(self.preset_idx.is_some(), egui::Button::new("↺").small()).on_hover_text("Revert: load the saved preset again").clicked()
+                if ui.add_enabled(self.preset_idx.is_some(), icons::small(Icon::Reset)).on_hover_text("Revert: load the saved preset again").clicked()
                     && let Some(i) = self.preset_idx {
                         self.load_preset(i);
                     }
@@ -1431,7 +1433,7 @@ impl PhthoraApp {
             let resp = frame
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let handle = ui.add(egui::Label::new("☰").sense(Sense::click_and_drag())).on_hover_text("Drag to reorder, right click for groups");
+                        let handle = ui.add(icons::bare(Icon::Menu, Sense::click_and_drag())).on_hover_text("Drag to reorder, right click for groups");
                         handle.dnd_set_drag_payload(i);
                         let group_menu = |ui: &mut egui::Ui, moved_into: &mut Option<(usize, usize, Option<u64>)>, group_op: &mut Option<GroupOp>| match group_end {
                             Some(end) => {
@@ -1447,18 +1449,18 @@ impl PhthoraApp {
                         };
                         handle.context_menu(|ui| group_menu(ui, &mut moved_into, &mut group_op));
                         ui.checkbox(&mut e.enabled, "");
-                        let arrow = if e.expanded { "▼" } else { "▶" };
-                        if ui.small_button(arrow).clicked() {
+                        let arrow = if e.expanded { Icon::Collapse } else { Icon::Expand };
+                        if ui.add(icons::small(arrow)).clicked() {
                             e.expanded = !e.expanded;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(!locked, egui::Button::new("✕").small()).on_hover_text("Remove").on_disabled_hover_text("Locked").clicked() {
+                            if ui.add_enabled(!locked, icons::small(Icon::Close)).on_hover_text("Remove").on_disabled_hover_text("Locked").clicked() {
                                 remove = Some(uid);
                             }
-                            if ui.small_button("⧉").on_hover_text("Duplicate").clicked() {
+                            if ui.add(icons::small(Icon::Duplicate)).on_hover_text("Duplicate").clicked() {
                                 duplicate = Some(uid);
                             }
-                            if ui.small_button("↺").on_hover_text("Reset parameters").clicked() {
+                            if ui.add(icons::small(Icon::Reset)).on_hover_text("Reset parameters").clicked() {
                                 for p in e.desc.params.clone() {
                                     e.reset(&p.key);
                                 }
@@ -1466,19 +1468,19 @@ impl PhthoraApp {
                             }
                             if PaintKind::of(&e.desc.id).is_some() {
                                 let on = active_draw == Some(uid);
-                                let txt = egui::RichText::new("✏").color(if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() });
-                                if ui.add(egui::Button::new(txt).selected(on).small()).on_hover_text("Mouse draw: paint on the preview with this effect").clicked() {
+                                let tint = if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() };
+                                if ui.add(icons::small_tinted(Icon::Pencil, Some(tint)).selected(on)).on_hover_text("Mouse draw: paint on the preview with this effect").clicked() {
                                     pick_draw = Some(uid);
                                 }
                             }
-                            let lock = if e.locked { "🔒" } else { "🔓" };
-                            if ui.small_button(lock).on_hover_text("Lock: kept by Chaos and preset loading").clicked() {
+                            let lock = if e.locked { Icon::Lock } else { Icon::Unlock };
+                            if ui.add(icons::small(lock)).on_hover_text("Lock: kept by Chaos and preset loading").clicked() {
                                 e.locked = !e.locked;
                             }
-                            if i + 1 < n && ui.small_button("⏷").clicked() {
+                            if i + 1 < n && ui.add(icons::small(Icon::Down)).clicked() {
                                 moved = Some((i, i + 1));
                             }
-                            if i > 0 && ui.small_button("⏶").clicked() {
+                            if i > 0 && ui.add(icons::small(Icon::Up)).clicked() {
                                 moved = Some((i, i - 1));
                             }
                             // the name fills what the buttons leave and is cut short there
@@ -1574,27 +1576,27 @@ impl PhthoraApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut g.enabled, "").on_hover_text("Group on / off");
-                    if ui.small_button(if g.expanded { "▼" } else { "▶" }).clicked() {
+                    if ui.add(icons::small(if g.expanded { Icon::Collapse } else { Icon::Expand })).clicked() {
                         g.expanded = !g.expanded;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_enabled(!g.locked, egui::Button::new("✕").small()).on_hover_text("Remove the group and its effects").on_disabled_hover_text("Locked").clicked() {
+                        if ui.add_enabled(!g.locked, icons::small(Icon::Close)).on_hover_text("Remove the group and its effects").on_disabled_hover_text("Locked").clicked() {
                             op = Some(GroupOp::Remove(gid));
                         }
-                        if ui.small_button("⧉").on_hover_text("Duplicate the group").clicked() {
+                        if ui.add(icons::small(Icon::Duplicate)).on_hover_text("Duplicate the group").clicked() {
                             op = Some(GroupOp::Duplicate(gid));
                         }
-                        if ui.small_button("⊟").on_hover_text("Ungroup: keep the effects").clicked() {
+                        if ui.add(icons::small(Icon::Ungroup)).on_hover_text("Ungroup: keep the effects").clicked() {
                             op = Some(GroupOp::Ungroup(gid));
                         }
-                        let lock = if g.locked { "🔒" } else { "🔓" };
-                        if ui.small_button(lock).on_hover_text("Lock: the group is kept by Chaos and preset loading").clicked() {
+                        let lock = if g.locked { Icon::Lock } else { Icon::Unlock };
+                        if ui.add(icons::small(lock)).on_hover_text("Lock: the group is kept by Chaos and preset loading").clicked() {
                             g.locked = !g.locked;
                         }
-                        if !last && ui.small_button("⏷").clicked() {
+                        if !last && ui.add(icons::small(Icon::Down)).clicked() {
                             op = Some(GroupOp::Move(gid, false));
                         }
-                        if !first && ui.small_button("⏶").clicked() {
+                        if !first && ui.add(icons::small(Icon::Up)).clicked() {
                             op = Some(GroupOp::Move(gid, true));
                         }
                         // the name fills what the buttons leave and is cut short there
@@ -1846,7 +1848,7 @@ impl PhthoraApp {
                             self.start_webcam(None);
                         }
                     }
-                    if ui.small_button("↻").on_hover_text("Look for devices again").clicked() {
+                    if ui.add(icons::small(Icon::Refresh)).on_hover_text("Look for devices again").clicked() {
                         self.devices = phthora_media::list_devices();
                     }
                 });
@@ -1928,7 +1930,7 @@ impl PhthoraApp {
         let live = matches!(self.source, Source::Live(_));
         egui::Window::new("Export").open(&mut open).resizable(false).show(ctx, |ui| {
             if live {
-                ui.label("The webcam has no fixed length: record it with ● Rec,\nthe recording opens here for the export.");
+                ui.label("The webcam has no fixed length: record it with Rec,\nthe recording opens here for the export.");
                 return;
             }
             let running = self.export.running.is_some();

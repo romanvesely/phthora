@@ -4,6 +4,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use phthora_core::modulator::{keyframe_value, Band, Modulator, Shape};
 use phthora_core::params::{ColorStop, ParamKind, Value};
 use phthora_core::{EffectInstance, OutputMode};
+use crate::icons::{self, Icon};
 use std::collections::{BTreeMap, HashSet};
 
 pub enum Action {
@@ -69,7 +70,12 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
         model_status(ui, cx);
     }
     if let Some(p) = &cx.problem {
-        ui.colored_label(Color32::from_rgb(240, 110, 100), format!("⚠ {p}"));
+        let red = Color32::from_rgb(240, 110, 100);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(Vec2::splat(icons::NORMAL), Sense::hover());
+            icons::paint(ui.painter(), Icon::Warning, r, red);
+            ui.colored_label(red, p);
+        });
     }
     for p in e.desc.params.clone() {
         if p.hidden {
@@ -91,8 +97,8 @@ pub fn effect_params(ui: &mut egui::Ui, e: &mut EffectInstance, cx: &mut ParamCt
                         if !*image_only {
                             let open = cx.open_mods.contains(&(uid, key.clone()));
                             let on = e.modulators.get(&key).map(|m| m.enabled).unwrap_or(false);
-                            let txt = egui::RichText::new("~").strong().color(if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() });
-                            let r = ui.add(egui::Button::new(txt).selected(open).small()).on_hover_text("Modulator (right click: copy, paste)");
+                            let tint = if on { Color32::from_rgb(120, 220, 160) } else { ui.visuals().weak_text_color() };
+                            let r = ui.add(icons::small_tinted(Icon::Modulator, Some(tint)).selected(open)).on_hover_text("Modulator (right click: copy, paste)");
                             if r.clicked() {
                                 if open {
                                     cx.open_mods.remove(&(uid, key.clone()));
@@ -271,7 +277,7 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
     let mut changed = false;
     ui.horizontal(|ui| {
         label(ui, title);
-        if stops.len() < 6 && ui.small_button("+").on_hover_text("Add color").clicked() {
+        if stops.len() < 6 && ui.add(icons::small(Icon::Plus)).on_hover_text("Add color").clicked() {
             let last = stops.last().map(|s| s.stop).unwrap_or(0.0);
             stops.push(ColorStop { color: "#ffffff".into(), stop: (last + 0.2).min(1.0), name: String::new() });
             changed = true;
@@ -290,7 +296,7 @@ fn color_stops_ui(ui: &mut egui::Ui, title: &str, stops: &mut Vec<ColorStop>, id
                 if ui.add(egui::Slider::new(&mut s.stop, 0.0..=1.0).show_value(false)).changed() {
                     changed = true;
                 }
-                if ui.small_button("✕").clicked() {
+                if ui.add(icons::small(Icon::Close)).clicked() {
                     remove = Some(i);
                 }
             });
@@ -413,7 +419,7 @@ fn modulator_ui(ui: &mut egui::Ui, m: &mut Modulator, id: egui::Id, kx: &KeyCtx,
                 ui.label(egui::RichText::new("Shift: snap · double click: delete").small().weak())
                     .on_hover_text("Click to add a keyframe, drag to move it (Shift snaps to steps of 0.05), double or right click to delete it. The background shows the loudness of the audio track.");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("⛶").on_hover_text("Large editor").clicked() {
+                    if ui.add(icons::small(Icon::Fullscreen)).on_hover_text("Large editor").clicked() {
                         big = !big;
                     }
                     if ui.add_enabled(!m.keyframes.is_empty(), egui::Button::new("Clear").small()).on_hover_text("Remove all keyframes").clicked() {

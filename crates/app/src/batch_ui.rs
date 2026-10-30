@@ -174,7 +174,7 @@ impl BatchUi {
                     egui::ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
                         for (i, f) in self.files.iter().enumerate() {
                             ui.horizontal(|ui| {
-                                if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                                if ui.add(crate::icons::small(crate::icons::Icon::Close)).on_hover_text("Remove").clicked() {
                                     remove = Some(i);
                                 }
                                 let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

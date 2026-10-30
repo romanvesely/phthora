@@ -282,7 +282,7 @@ impl AudioState {
                     ui.label("–");
                     ui.add(egui::DragValue::new(&mut b.hi_hz).range(0.0..=22050.0).speed(5.0).suffix(" Hz"));
                     ui.add(egui::DragValue::new(&mut b.gain).range(0.0..=5.0).speed(0.01).prefix("×"));
-                    if ui.small_button("✕").clicked() {
+                    if ui.add(crate::icons::small(crate::icons::Icon::Close)).clicked() {
                         remove = Some(i);
                     }
                 });
