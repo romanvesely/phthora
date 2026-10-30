@@ -1,9 +1,9 @@
 //! Messages sent to a virtual ALSA sequencer port reach the input watcher.
+#![cfg(target_os = "linux")]
 
 use phthora_audio::MidiIn;
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
 #[test]
 fn virtual_port_is_picked_up() {
     use midir::os::unix::VirtualOutput;
