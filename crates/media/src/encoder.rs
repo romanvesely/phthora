@@ -475,7 +475,8 @@ fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
         (Format::Webp | Format::WebpStill | Format::Apng | Format::PngSeq | Format::Png, _) => "[0:v]format=rgba[v]".to_string(),
     };
     let graph = if with_audio {
-        format!("{vgraph};[1:a]{}[a]", audio_chain(s.audio.as_ref().unwrap()))
+        // the looped sound ends by itself: ffmpeg 4.x never stops an endless filter source on -shortest
+        format!("{vgraph};[1:a]{},atrim=end={}[a]", audio_chain(s.audio.as_ref().unwrap()), secs_arg(s.duration))
     } else {
         vgraph
     };
