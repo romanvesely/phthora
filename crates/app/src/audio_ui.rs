@@ -28,6 +28,11 @@ pub struct AudioState {
     pub muted: bool,
     pub include_in_export: bool,
     pub open: bool,
+    /// length of a loop cut to whole bars: the used part of the track is exactly this long
+    /// and its end blends into the sound before its start
+    pub bar_loop: Option<f64>,
+    /// tempo picked in the window, for the app to take over
+    pub use_tempo: Option<f64>,
     /// analysed track with its used part set
     pub track: Option<AudioTrack>,
     track_path: Option<PathBuf>,
@@ -62,6 +67,8 @@ impl AudioState {
             muted: false,
             include_in_export: true,
             open: false,
+            bar_loop: None,
+            use_tempo: None,
             track: None,
             track_path: None,
             loading: None,
@@ -119,6 +126,10 @@ impl AudioState {
         let (start, end) = match self.src {
             Src::File => (self.file_start, None),
             _ => trim,
+        };
+        let end = match self.bar_loop {
+            Some(len) => Some(start + len),
+            None => end,
         };
         if let Some(t) = &mut self.track {
             if t.sensitivity != self.settings.sensitivity {
@@ -227,7 +238,7 @@ impl AudioState {
             }
         }
         let Some(p) = self.player.as_ref() else { return };
-        p.set_program(Some(Program { pcm: tr.pcm.clone(), start: tr.start, span: tr.span(), loop_len }));
+        p.set_program(Some(Program { pcm: tr.pcm.clone(), start: tr.start, span: tr.span(), loop_len, fade: self.loop_fade() }));
         p.set_muted(self.muted);
         p.set_playing(playing);
         let d = (p.position() - t).abs();
@@ -249,7 +260,12 @@ impl AudioState {
             return None;
         }
         let t = self.track.as_ref()?;
-        Some(AudioSource { path: self.track_path.clone()?, start: t.start, end: t.end })
+        Some(AudioSource { path: self.track_path.clone()?, start: t.start, end: t.end, fade: self.loop_fade() })
+    }
+
+    /// Cross-fade at the loop seam: only for loops cut to bars.
+    pub fn loop_fade(&self) -> f64 {
+        if self.bar_loop.is_some() { phthora_audio::LOOP_FADE } else { 0.0 }
     }
 
     pub fn window(&mut self, ctx: &egui::Context, input_audio: bool) {
@@ -280,7 +296,31 @@ impl AudioState {
                     ui.end_row();
                     ui.label("Start at");
                     let len = self.track.as_ref().map(|t| t.duration()).unwrap_or(3600.0);
-                    ui.add(egui::DragValue::new(&mut self.file_start).range(0.0..=len).speed(0.05).max_decimals(2).suffix(" s"));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut self.file_start).range(0.0..=len).speed(0.05).max_decimals(2).suffix(" s"));
+                        if let Some(t) = self.track.as_ref().and_then(|t| t.tempo) {
+                            // the bar the start lies in, counted from the first one
+                            let mut bar = ((self.file_start - t.bar_start(0)) / t.bar_len()).round().max(0.0) as u32;
+                            let last = ((len - t.bar_start(0)) / t.bar_len()).floor().max(0.0) as u32;
+                            if ui.add(egui::DragValue::new(&mut bar).range(0..=last).prefix("bar ")).on_hover_text("Start on a bar of the detected tempo").changed() {
+                                self.file_start = t.bar_start(bar);
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
+                if self.src != Src::Mic
+                    && let Some(t) = self.track.as_ref().and_then(|t| t.tempo)
+                {
+                    ui.label("Tempo");
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{:.1} BPM", t.bpm));
+                        let sure = if t.confidence > 0.8 { "clear beat" } else if t.confidence > 0.5 { "probably" } else { "a guess" };
+                        ui.label(egui::RichText::new(sure).weak()).on_hover_text(format!("confidence {:.2}", t.confidence));
+                        if ui.small_button("Use").on_hover_text("Sync effect loops to this tempo (settings: BPM, loop in bars)").clicked() {
+                            self.use_tempo = Some(t.bpm);
+                        }
+                    });
                     ui.end_row();
                 }
                 ui.label("Gain");

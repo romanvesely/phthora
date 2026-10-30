@@ -149,6 +149,8 @@ pub struct PhthoraApp {
     timing: TimingSettings,
     bpm: f64,
     use_bpm: bool,
+    /// output cut to this many bars of the tempo (with `use_bpm`)
+    bars: Option<u32>,
     bpm_tap: BpmTap,
     source: Source,
     input_path: Option<PathBuf>,
@@ -201,6 +203,7 @@ impl PhthoraApp {
         let rs = cc.wgpu_render_state.clone().expect("wgpu renderer");
         let ctx = GpuContext::from_parts(rs.device.clone(), rs.queue.clone());
         let settings = Settings::load();
+        let (bpm, use_bpm, bars) = (settings.bpm.clamp(20.0, 300.0), settings.use_bpm, settings.loop_bars);
         // a remembered folder that was deleted meanwhile means all presets
         let preset_folder = settings.preset_folder.clone().filter(|f| store::preset_dir().join(f).is_dir());
         let mut engine = Engine::new(&ctx, DEFAULT_SIZE.0, DEFAULT_SIZE.1);
@@ -232,8 +235,9 @@ impl PhthoraApp {
             playback: Playback::default(),
             vaapi: Default::default(),
             timing: TimingSettings::default(),
-            bpm: 120.0,
-            use_bpm: false,
+            bpm,
+            use_bpm,
+            bars,
             bpm_tap: BpmTap::default(),
             source: Source::None,
             input_path: None,
@@ -715,8 +719,11 @@ impl PhthoraApp {
         }
         self.settings.output_dir = out.parent().map(|p| p.to_path_buf());
         self.store_export_choices();
+        let bar_loop = self.bar_loop().is_some();
+        // a loop cut to bars keeps its length: the export offset moves all of it
+        let shift = |s: &Self, start: f64, end: Option<f64>| if bar_loop { (start + s.export.audio_start, end.map(|e| e + s.export.audio_start)) } else { (s.offset_audio_start(start, end), end) };
         let audio = self.audio.export_source().map(|mut a| {
-            a.start = self.offset_audio_start(a.start, a.end);
+            (a.start, a.end) = shift(self, a.start, a.end);
             a
         });
         self.settings.audio = self.audio.settings.clone();
@@ -725,7 +732,7 @@ impl PhthoraApp {
         // the analysed track moves with the exported sound, so modulators keep reacting to what is heard
         let audio_track = self.audio.track.clone().filter(|_| self.audio.src != Src::Mic).map(|mut t| {
             if audio.is_some() {
-                t.start = self.offset_audio_start(t.start, t.end);
+                (t.start, t.end) = shift(self, t.start, t.end);
             }
             t
         });
@@ -794,6 +801,9 @@ impl PhthoraApp {
             chain: self.chain.clone(),
             playback: Playback { speed: self.playback.speed, direction: self.playback.direction, ..Default::default() },
             bpm: self.use_bpm.then_some(self.bpm),
+            bpm_auto: false,
+            bars: None,
+            loop_start: None,
             background: self.engine.background,
             flip_x: self.engine.flip_x,
             quality: self.export.quality,
@@ -855,8 +865,22 @@ impl PhthoraApp {
         }
     }
 
+    /// Length of the output when it is cut to whole bars.
+    fn bar_loop(&self) -> Option<f64> {
+        let video = self.timing.mode == OutputMode::Video && !matches!(self.source, Source::Live(_));
+        self.bars.filter(|_| self.use_bpm && video).map(|b| phthora_core::clock::bars_duration(self.bpm, b))
+    }
+
     fn tick(&mut self) {
         let now = Instant::now();
+        if let Some(t) = self.audio.use_tempo.take() {
+            self.bpm = t;
+            self.use_bpm = true;
+        }
+        self.audio.bar_loop = self.bar_loop();
+        if let Some(len) = self.audio.bar_loop {
+            self.timing.duration = len;
+        }
         let input_audio = self.input_audio_usable();
         self.audio.sync(self.input_path.as_deref(), input_audio, (self.playback.trim_start, self.playback.trim_end));
         let video_playing = self.playing && self.timing.mode == OutputMode::Video;
@@ -1741,7 +1765,8 @@ impl PhthoraApp {
                 });
                 ui.end_row();
                 ui.label("Duration");
-                ui.add(egui::DragValue::new(&mut self.timing.duration).range(0.5..=3600.0).speed(0.05).suffix(" s"));
+                ui.add_enabled(self.bar_loop().is_none(), egui::DragValue::new(&mut self.timing.duration).range(0.5..=3600.0).speed(0.05).max_decimals(2).suffix(" s"))
+                    .on_disabled_hover_text("Set by the loop length in bars");
                 ui.end_row();
                 ui.label("Frame rate");
                 egui::ComboBox::from_id_salt("fps").selected_text(format!("{}", self.timing.fps)).show_ui(ui, |ui| {
@@ -1766,6 +1791,12 @@ impl PhthoraApp {
                             self.use_bpm = true;
                         }
                     }
+                    if ui.small_button("÷2").on_hover_text("Half the tempo").clicked() {
+                        self.bpm = (self.bpm / 2.0).max(20.0);
+                    }
+                    if ui.small_button("×2").on_hover_text("Double the tempo").clicked() {
+                        self.bpm = (self.bpm * 2.0).min(300.0);
+                    }
                     // one lamp per beat of the bar
                     if self.use_bpm {
                         let beat = (self.last_ft.export_time * self.bpm / 60.0).floor() as i64;
@@ -1781,6 +1812,28 @@ impl PhthoraApp {
                         }
                     }
                 });
+                ui.end_row();
+                ui.label("Loop");
+                ui.add_enabled_ui(self.use_bpm, |ui| {
+                    let label = |b: Option<u32>| match b {
+                        None => "off".to_string(),
+                        Some(1) => "1 bar".to_string(),
+                        Some(n) => format!("{n} bars"),
+                    };
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("bars").selected_text(label(self.bars)).show_ui(ui, |ui| {
+                            for b in [None, Some(1), Some(2), Some(4), Some(8), Some(16)] {
+                                ui.selectable_value(&mut self.bars, b, label(b));
+                            }
+                        });
+                        if let Some(len) = self.bar_loop() {
+                            ui.label(egui::RichText::new(format!("{len:.2} s")).weak());
+                        }
+                    });
+                })
+                .response
+                .on_hover_text("Cut the output to whole bars of the tempo; the audio loops without a click")
+                .on_disabled_hover_text("Needs a tempo: turn on \"sync loops\"");
                 ui.end_row();
                 ui.label("Background");
                 ui.horizontal(|ui| {
@@ -1911,6 +1964,7 @@ impl PhthoraApp {
     /// webcam's flip while the webcam or a recording of it is shown, else for files.
     fn store_view_settings(&mut self) {
         self.settings.background = self.engine.background;
+        (self.settings.bpm, self.settings.use_bpm, self.settings.loop_bars) = (self.bpm, self.use_bpm, self.bars);
         if matches!(self.source, Source::Live(_)) || self.recording_flip {
             self.settings.flip_webcam = self.engine.flip_x;
         } else {

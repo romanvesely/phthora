@@ -92,6 +92,11 @@ impl TimingSettings {
     }
 }
 
+/// Length of `bars` 4/4 bars at `bpm` in seconds.
+pub fn bars_duration(bpm: f64, bars: u32) -> f64 {
+    bars as f64 * 4.0 * 60.0 / bpm.max(1.0)
+}
+
 /// Tap tempo: feed tap timestamps in seconds, get BPM after the second tap.
 #[derive(Default, Debug)]
 pub struct BpmTap {
@@ -129,6 +134,15 @@ mod tests {
         assert!((t.loop_progress(0.5) - 0.5).abs() < 1e-9);
         assert!(t.loop_progress(0.999_999) > 0.99);
     }
+    #[test]
+    fn bars_at_a_tempo() {
+        assert!((bars_duration(128.0, 2) - 3.75).abs() < 1e-12);
+        assert!((bars_duration(120.0, 16) - 32.0).abs() < 1e-12);
+        // a loop cut to bars holds whole effect loops (one bar each)
+        let t = TimingSettings { duration: bars_duration(133.0, 4), bpm: Some(133.0), ..Default::default() };
+        assert!((t.duration / t.loop_duration() - 4.0).abs() < 1e-9);
+    }
+
     #[test]
     fn bpm_bar() {
         let t = TimingSettings { duration: 8.0, bpm: Some(120.0), ..Default::default() };

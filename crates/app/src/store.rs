@@ -54,6 +54,10 @@ pub struct Settings {
     pub virtual_cam: Option<PathBuf>,
     /// preset folder chosen last (None: all presets)
     pub preset_folder: Option<String>,
+    /// tempo, whether effect loops follow it, and the output cut to this many bars
+    pub bpm: f64,
+    pub use_bpm: bool,
+    pub loop_bars: Option<u32>,
 }
 
 impl Default for Settings {
@@ -73,6 +77,9 @@ impl Default for Settings {
             flip_webcam: true,
             virtual_cam: None,
             preset_folder: None,
+            bpm: 120.0,
+            use_bpm: false,
+            loop_bars: None,
         }
     }
 }

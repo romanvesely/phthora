@@ -85,6 +85,12 @@ pub struct Shared {
     pub chain: Chain,
     pub playback: Playback,
     pub bpm: Option<f64>,
+    /// take the tempo from the audio track (instead of `bpm`)
+    pub bpm_auto: bool,
+    /// cut the output to this many bars, the audio looped without a click
+    pub bars: Option<u32>,
+    /// where in the audio such a loop starts
+    pub loop_start: Option<LoopStart>,
     /// straight RGB + opacity
     pub background: [f32; 4],
     pub flip_x: bool,
@@ -95,6 +101,13 @@ pub struct Shared {
     pub audio_start: f64,
     pub audio_settings: AudioSettings,
     pub midi: MidiValues,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LoopStart {
+    /// bar n of the detected tempo (0 = the first)
+    Bar(u32),
+    Seconds(f64),
 }
 
 /// A job for one input, with a note when something was changed to make it work.
@@ -141,25 +154,50 @@ pub fn build_job(sh: &Shared, ov: &Overrides, input: Option<&Path>, info: Option
     // the input's own audio follows the trim; reversed or sped-up input has no matching audio
     let audio = match &sh.audio {
         AudioChoice::None => None,
-        AudioChoice::File(f) => Some(AudioSource { path: f.clone(), start: sh.audio_start, end: None }),
+        AudioChoice::File(f) => Some(AudioSource { path: f.clone(), start: sh.audio_start, ..Default::default() }),
         AudioChoice::Input if sh.playback.speed == 1.0 && sh.playback.direction == Direction::Forward => video
             .filter(|i| i.has_audio)
             .and(input)
-            .map(|p| AudioSource { path: p.to_path_buf(), start: sh.playback.trim_start + sh.audio_start, end: sh.playback.trim_end }),
+            .map(|p| AudioSource { path: p.to_path_buf(), start: sh.playback.trim_start + sh.audio_start, end: sh.playback.trim_end, fade: 0.0 }),
         AudioChoice::Input => None,
     };
-    let audio_track = match &audio {
-        Some(a) => {
-            let mut t = phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?.with_sensitivity(sh.audio_settings.sensitivity);
-            t.start = a.start;
-            t.end = a.end;
-            Some(t)
-        }
+    let mut audio = audio;
+    let mut playback = sh.playback;
+    let mut audio_track = match &audio {
+        Some(a) => Some(phthora_audio::AudioTrack::load(&a.path).map_err(|e| format!("audio: {e}"))?.with_sensitivity(sh.audio_settings.sensitivity)),
         None => None,
     };
+    let tempo = audio_track.as_ref().and_then(|t| t.tempo);
+    if sh.bpm_auto {
+        if audio_track.is_none() {
+            return Err("--bpm auto needs audio".into());
+        }
+        timing.bpm = Some(tempo.ok_or("--bpm auto: no clear beat found in the audio")?.bpm);
+    }
+    if let Some(bars) = sh.bars.filter(|_| timing.mode == OutputMode::Video) {
+        let len = phthora_core::clock::bars_duration(timing.bpm.ok_or("--bars needs --bpm")?, bars);
+        timing.duration = len;
+        if let Some(a) = &mut audio {
+            let start = match sh.loop_start {
+                Some(LoopStart::Bar(n)) => tempo.ok_or("--loop-start bar: no clear beat found in the audio")?.bar_start(n),
+                Some(LoopStart::Seconds(s)) => s,
+                None => a.start,
+            };
+            if sh.loop_start.is_some() && matches!(sh.audio, AudioChoice::Input) {
+                // the picture follows its own sound
+                playback.trim_start = start;
+                playback.trim_end = None;
+            }
+            (a.start, a.end, a.fade) = (start, Some(start + len), phthora_audio::LOOP_FADE);
+        }
+    }
+    if let (Some(t), Some(a)) = (&mut audio_track, &audio) {
+        t.start = a.start;
+        t.end = a.end;
+    }
     let job = ExportJob {
         input: input.map(Path::to_path_buf),
-        playback: sh.playback,
+        playback,
         chain: sh.chain.clone(),
         timing,
         width: w & !1,
@@ -361,6 +399,9 @@ mod tests {
             chain: Chain::default(),
             playback: Playback::default(),
             bpm: None,
+            bpm_auto: false,
+            bars: None,
+            loop_start: None,
             background: [0.0, 0.0, 0.0, 1.0],
             flip_x: false,
             quality: Quality::High,

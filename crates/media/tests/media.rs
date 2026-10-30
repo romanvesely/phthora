@@ -370,7 +370,7 @@ fn encode_mp4_with_and_without_audio() {
     let wav = t.p("tone.wav");
     ff(&["-f", "lavfi", "-i", "sine=d=0.5", wav.to_str().unwrap()]);
     let mut s = settings(&t, "b.mp4", Format::Mp4, 40);
-    s.audio = Some(AudioSource { path: wav.clone(), start: 0.1, end: Some(0.4) });
+    s.audio = Some(AudioSource { path: wav.clone(), start: 0.1, end: Some(0.4), fade: 0.0 });
     let p = encode(s, 40, |i| opaque_frame(i, 64, 48));
     let info = probe(&p).unwrap();
     assert!(info.has_audio);
@@ -385,12 +385,12 @@ fn encode_mp4_with_and_without_audio() {
 
     // Audio from a video file works too.
     let mut s = settings(&t, "c.mp4", Format::Mp4, 10);
-    s.audio = Some(AudioSource { path: make_video(&t), start: 0.0, end: None });
+    s.audio = Some(AudioSource { path: make_video(&t), start: 0.0, end: None, fade: 0.0 });
     assert!(probe(&encode(s, 10, |i| opaque_frame(i, 64, 48))).unwrap().has_audio);
 
     // Source without audio is rejected up front.
     let mut s = settings(&t, "d.mp4", Format::Mp4, 1);
-    s.audio = Some(AudioSource { path: p.with_file_name("a.mp4"), start: 0.0, end: None });
+    s.audio = Some(AudioSource { path: p.with_file_name("a.mp4"), start: 0.0, end: None, fade: 0.0 });
     assert!(matches!(Encoder::start(s), Err(MediaError::InvalidInput(_))));
 }
 
@@ -414,7 +414,7 @@ fn encode_webm_with_alpha_and_audio() {
     let wav = t.p("tone.wav");
     ff(&["-f", "lavfi", "-i", "sine=d=2", wav.to_str().unwrap()]);
     let mut s = settings(&t, "a.webm", Format::WebM, 12);
-    s.audio = Some(AudioSource { path: wav, start: 0.0, end: None });
+    s.audio = Some(AudioSource { path: wav, start: 0.0, end: None, fade: 0.0 });
     let p = encode(s, 12, |i| alpha_frame(i, 64, 48));
     let info = probe(&p).unwrap();
     assert_eq!((info.codec.as_str(), info.width, info.height), ("vp9", 64, 48));
@@ -432,7 +432,7 @@ fn encode_gif_and_png() {
     let wav = t.p("tone.wav");
     ff(&["-f", "lavfi", "-i", "sine=d=1", wav.to_str().unwrap()]);
     let mut s = settings(&t, "a.gif", Format::Gif, 25);
-    s.audio = Some(AudioSource { path: wav, start: 0.0, end: None });
+    s.audio = Some(AudioSource { path: wav, start: 0.0, end: None, fade: 0.0 });
     let p = encode(s, 25, |i| opaque_frame(i, 64, 48));
     let info = probe(&p).unwrap();
     assert_eq!((info.kind, info.width, info.height), (MediaKind::Gif, 64, 48));

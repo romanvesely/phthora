@@ -16,6 +16,36 @@ pub struct Program {
     pub span: f64,
     /// output loop length (seconds): the position wraps here
     pub loop_len: f64,
+    /// seconds at the end of the used part that blend into the sound before its start
+    pub fade: f64,
+}
+
+/// Cross-fade at the seam of a loop cut to whole bars, in seconds.
+pub const LOOP_FADE: f64 = 0.02;
+
+/// Sample at `u` seconds into the used part (`start`, `span` long) of mono PCM at
+/// `SAMPLE_RATE`. Within the last `fade` seconds the part blends (equal power, like the
+/// export) into the sound before its start, so the wrap to the start runs on without a click.
+pub fn loop_sample(pcm: &[f32], start: f64, span: f64, fade: f64, u: f64) -> f32 {
+    let read = |t: f64| {
+        if t < 0.0 {
+            return 0.0;
+        }
+        let x = t * SAMPLE_RATE as f64;
+        let i = x.floor() as usize;
+        let f = (x - x.floor()) as f32;
+        let a = pcm.get(i).copied().unwrap_or(0.0);
+        let b = pcm.get(i + 1).copied().unwrap_or(a);
+        a + (b - a) * f
+    };
+    let v = read(start + u);
+    let fade = fade.min(start).min(span / 2.0);
+    if fade > 0.0 && u > span - fade {
+        let w = ((u - (span - fade)) / fade) as f32 * std::f32::consts::FRAC_PI_2;
+        v * w.cos() + read(start + u - span) * w.sin()
+    } else {
+        v
+    }
 }
 
 struct Shared {
@@ -94,15 +124,9 @@ fn fill<T: Copy + Default>(sh: &Shared, out: &mut [T], channels: usize, rate: f6
     let muted = sh.muted.load(Ordering::Relaxed);
     let mut pos = f64::from_bits(sh.pos.load(Ordering::Relaxed));
     let step = 1.0 / rate;
-    let n = p.pcm.len();
     for frame in out.chunks_mut(channels) {
-        let tt = p.start + pos.rem_euclid(p.span.max(1e-6));
-        let x = tt * SAMPLE_RATE as f64;
-        let i = x.floor() as usize;
-        let f = (x - x.floor()) as f32;
-        let a = p.pcm.get(i).copied().unwrap_or(0.0);
-        let b = p.pcm.get((i + 1).min(n.saturating_sub(1))).copied().unwrap_or(0.0);
-        let v = if muted { 0.0 } else { a + (b - a) * f };
+        let span = p.span.max(1e-6);
+        let v = if muted { 0.0 } else { loop_sample(&p.pcm, p.start, span, p.fade, pos.rem_euclid(span)) };
         frame.fill(conv(v.clamp(-1.0, 1.0)));
         pos += step;
         if p.loop_len > 0.0 && pos >= p.loop_len {
@@ -110,4 +134,25 @@ fn fill<T: Copy + Default>(sh: &Shared, out: &mut [T], channels: usize, rate: f6
         }
     }
     sh.pos.store(pos.to_bits(), Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_loop_seam_runs_on() {
+        let sr = SAMPLE_RATE as f64;
+        // 50 Hz sine; the part 1 s .. 1.4649 s ends near a peak
+        let pcm: Vec<f32> = (0..3 * SAMPLE_RATE as usize).map(|i| (std::f64::consts::TAU * 50.0 * i as f64 / sr).sin() as f32).collect();
+        let (start, span) = (1.0, 20500.0 / sr);
+        let at = |fade: f64, k: i64| loop_sample(&pcm, start, span, fade, (k as f64 / sr).rem_euclid(span));
+        let jump = |fade: f64| (at(fade, 0) - at(fade, -1)).abs();
+        let smooth = (std::f64::consts::TAU * 50.0 / sr) as f32;
+        assert!(jump(0.0) > 5.0 * smooth);
+        assert!(jump(0.02) <= 1.5 * smooth, "{} vs {smooth}", jump(0.02));
+        // outside the fade the part is untouched
+        assert_eq!(at(0.02, 100), pcm[44100 + 100]);
+        assert_eq!(at(0.02, 10000), at(0.0, 10000));
+    }
 }

@@ -444,3 +444,41 @@ fn batch_arguments_are_checked() {
     assert!(listing(&d).is_empty());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A beat at 128 BPM: a decaying 60 Hz thump on every beat.
+fn click_track(d: &Path) -> PathBuf {
+    let p = d.join("beat.wav");
+    let st = Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=0.8*sin(2*PI*60*t)*exp(-mod(t-0.2\\,0.46875)*25)*gte(t\\,0.2):s=44100:d=20"])
+        .arg(&p)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    p
+}
+
+fn seconds(path: &Path, stream: &str) -> f64 {
+    let out = Command::new("ffprobe").args(["-v", "error", "-select_streams", stream, "-show_entries", "stream=duration", "-of", "csv=p=0"]).arg(path).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+}
+
+#[test]
+fn bars_of_a_detected_tempo_set_the_length() {
+    if !have("ffmpeg") {
+        eprintln!("skipped: ffmpeg not found");
+        return;
+    }
+    let d = tmp_dir("bars");
+    let beat = click_track(&d);
+    let out = d.join("loop.mp4");
+    run(bin().args(["render", "--effect", "rgb_shift", "--size", "64x64", "--fps", "24", "--bpm", "auto", "--bars", "2", "--loop-start", "bar:1", "--audio"]).arg(&beat).arg("--out").arg(&out));
+    // 2 bars at 128 BPM: 3.75 s, 90 frames
+    assert!(probe(&out, "stream=nb_read_frames").contains("nb_read_frames=90"), "{}", probe(&out, "stream=nb_read_frames"));
+    assert!((seconds(&out, "a:0") - 3.75).abs() < 0.05, "{}", seconds(&out, "a:0"));
+    // without audio there is no tempo to detect
+    let o = bin().args(["render", "--effect", "rgb_shift", "--bpm", "auto", "--bars", "2", "--out"]).arg(d.join("x.mp4")).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("needs audio"), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = bin().args(["render", "--effect", "rgb_shift", "--bars", "2", "--out"]).arg(d.join("x.mp4")).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("--bars needs"));
+    let _ = std::fs::remove_dir_all(&d);
+}

@@ -34,7 +34,9 @@ options for render:
   --fps N              frame rate (default: input rate or 30; GIF at most 50)
   --size WxH           output size, even numbers up to 4096 (default: input size)
   --quality Q          ultra | high | medium | low (MP4, WebM, WebP, JPG; GIF: 256/256/128/64 colors)
-  --bpm N              sync effect loops to a tempo
+  --bpm N|auto         sync effect loops to a tempo (auto: detected in the audio)
+  --bars N             cut the output to N bars of the tempo; the audio loops without a click
+  --loop-start bar:N|SEC  where in the audio the loop starts (bar 0 = the first; needs --bars)
   --background COLOR   #rrggbb, #rrggbbaa or transparent (default: black)
   --flip               mirror the input horizontally
   --trim START END     use only this part of the input (seconds; END may be 'end')
@@ -106,6 +108,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
     let mut size: Option<(u32, u32)> = None;
     let mut quality = Quality::High;
     let mut bpm = None;
+    let mut bpm_auto = false;
+    let mut bars: Option<f64> = None;
+    let mut loop_start = None;
     let mut background = [0.0, 0.0, 0.0, 1.0];
     let mut flip_x = false;
     let mut playback = Playback::default();
@@ -127,7 +132,19 @@ fn cli_render(args: &[String]) -> Result<(), String> {
             }
             "--duration" => duration = Some(parse_num(args, &mut i)?),
             "--fps" => fps = Some(parse_num(args, &mut i)?),
+            "--bpm" if args.get(i + 1).map(String::as_str) == Some("auto") => {
+                bpm_auto = true;
+                i += 1;
+            }
             "--bpm" => bpm = Some(parse_num(args, &mut i)?),
+            "--bars" => bars = Some(parse_num(args, &mut i)?),
+            "--loop-start" => {
+                let v = arg_value(args, &mut i)?;
+                loop_start = Some(match v.strip_prefix("bar:") {
+                    Some(n) => batch::LoopStart::Bar(n.parse().map_err(|_| format!("bad --loop-start {v}"))?),
+                    None => batch::LoopStart::Seconds(v.parse().map_err(|_| format!("bad --loop-start {v}, use bar:N or seconds"))?),
+                });
+            }
             "--size" => {
                 let v = arg_value(args, &mut i)?;
                 let (w, h) = v.split_once('x').ok_or("bad --size, use WxH")?;
@@ -206,6 +223,18 @@ fn cli_render(args: &[String]) -> Result<(), String> {
     if !(0.5..=2.0).contains(&audio_settings.sensitivity) {
         return Err("--audio-sensitivity must be 0.5 to 2".into());
     }
+    if bars.is_some_and(|b| !(1.0..=256.0).contains(&b) || b.fract() != 0.0) {
+        return Err("--bars must be a whole number from 1 to 256".into());
+    }
+    if bars.is_some() && bpm.is_none() && !bpm_auto {
+        return Err("--bars needs --bpm N or --bpm auto".into());
+    }
+    if loop_start.is_some() && bars.is_none() {
+        return Err("--loop-start needs --bars".into());
+    }
+    if bars.is_some() && duration.is_some() {
+        return Err("--bars sets the length: leave out --duration".into());
+    }
     if !(Playback::MIN_SPEED..=Playback::MAX_SPEED).contains(&playback.speed) {
         return Err(format!("--speed must be between {} and {}", Playback::MIN_SPEED, Playback::MAX_SPEED));
     }
@@ -245,6 +274,9 @@ fn cli_render(args: &[String]) -> Result<(), String> {
         chain,
         playback,
         bpm,
+        bpm_auto,
+        bars: bars.map(|b| b as u32),
+        loop_start,
         background,
         flip_x,
         quality,

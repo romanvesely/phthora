@@ -23,6 +23,8 @@ pub struct AudioTrack {
     /// drum hits picked from `bands` with `sensitivity`
     pub hits: Arc<DrumHits>,
     pub sensitivity: f32,
+    /// detected tempo, if the track has a clear beat
+    pub tempo: Option<crate::tempo::Tempo>,
     /// part of the track that is used and looped: start and end in seconds
     pub start: f64,
     pub end: Option<f64>,
@@ -42,7 +44,8 @@ impl AudioTrack {
         let snapshots = Arc::new((0..pcm.len().div_ceil(HOP)).map(|k| a.analyze(&pcm[..snapshot_end(k).min(pcm.len())])).collect());
         let bands = onset::track_bands(&pcm);
         let hits = onset::pick(&bands, 1.0);
-        Self { pcm: Arc::new(pcm), snapshots, bands: Arc::new(bands), hits: Arc::new(hits), sensitivity: 1.0, start: 0.0, end: None }
+        let tempo = crate::tempo::detect(&bands);
+        Self { pcm: Arc::new(pcm), snapshots, bands: Arc::new(bands), hits: Arc::new(hits), sensitivity: 1.0, tempo, start: 0.0, end: None }
     }
 
     /// The same track with its drum hits picked again (cheap: the analysis is kept).

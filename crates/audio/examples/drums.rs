@@ -11,6 +11,10 @@ fn main() {
     let track = phthora_audio::AudioTrack::load(std::path::Path::new(&path)).expect("load").with_sensitivity(s);
     if !times {
         println!("{:.1} s of audio analysed in {:.2} s", track.duration(), t0.elapsed().as_secs_f64());
+        match track.tempo {
+            Some(t) => println!("tempo {:.2} BPM, first beat {:.3} s, bar from beat {}, confidence {:.2}", t.bpm, t.first_beat, t.downbeat, t.confidence),
+            None => println!("no tempo"),
+        }
     }
     for (d, name) in phthora_audio::onset::DRUM_NAMES.iter().enumerate() {
         let hits = &track.hits.0[d];

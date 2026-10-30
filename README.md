@@ -161,7 +161,9 @@ phthora render INPUT... --out-dir DIR [options]
   --fps N              frame rate (default: input rate or 30; GIF at most 50)
   --size WxH           output size, even numbers up to 4096 (default: input size)
   --quality Q          ultra | high | medium | low (MP4, WebM, WebP, JPG; GIF: 256/256/128/64 colors)
-  --bpm N              sync effect loops to a tempo
+  --bpm N|auto         sync effect loops to a tempo (auto: detected in the audio)
+  --bars N             cut the output to N bars of the tempo; the audio loops without a click
+  --loop-start bar:N|SEC  where in the audio the loop starts (bar 0 = the first; needs --bars)
   --background COLOR   #rrggbb, #rrggbbaa or transparent (default: black)
   --flip               mirror the input horizontally
   --trim START END     use only this part of the input (seconds; END may be 'end')

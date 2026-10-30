@@ -163,6 +163,46 @@ fn parse_encoders(text: &str) -> HashSet<String> {
 mod tests {
     use super::*;
 
+    /// Samples in the looped part: 23.24 periods of 50 Hz, it ends near a peak of the sine.
+    const PART: usize = 20500;
+
+    /// The audio chain run on a 50 Hz sine (part from 1 s, `PART` samples long), 1.5 s of
+    /// output as mono f32 at 44.1 kHz.
+    fn looped(fade: f64) -> Vec<f32> {
+        let a = AudioSource { path: "unused".into(), start: 1.0, end: Some(1.0 + PART as f64 / 44100.0), fade };
+        let out = ffmpeg_cmd()
+            .args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=50:sample_rate=44100:duration=3", "-filter_complex"])
+            .arg(format!("[0:a]{}[a]", audio_chain(&a)))
+            .args(["-map", "[a]", "-t", "1.5", "-ac", "1", "-f", "f32le", "-"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        out.stdout.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
+    }
+
+    #[test]
+    fn looped_audio_runs_on_without_a_click() {
+        if !crate::ffmpeg_available() {
+            return;
+        }
+        let jump = |v: &[f32], at: usize| (at - 3..at + 3).map(|i| (v[i + 1] - v[i]).abs()).fold(0.0f32, f32::max);
+        let seams = [PART, 2 * PART, 3 * PART];
+        let hard = looped(0.0);
+        let soft = looped(0.02);
+        assert_eq!(soft.len(), hard.len());
+        assert_eq!(hard.len(), 66150);
+        // a 50 Hz sine at amplitude 1/8 moves at most ~0.0009 per sample
+        let smooth = soft[100..20000].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        for at in seams {
+            // the seam is where the part starts again
+            assert!((hard[at] - hard[0]).abs() < 1e-3 && (hard[at + 100] - hard[100]).abs() < 1e-3, "seam at {at}");
+            assert!(jump(&hard, at) > 5.0 * smooth, "the hard cut should click: {} vs {smooth}", jump(&hard, at));
+            assert!(jump(&soft, at) <= 1.5 * smooth, "seam at {at}: {} vs {smooth}", jump(&soft, at));
+            // and the part starts unchanged after the seam
+            assert!((soft[at + 50] - hard[at + 50]).abs() < 1e-4);
+        }
+    }
+
     #[test]
     fn encoder_list_parsing() {
         let text = "Encoders:\n V..... = Video\n ------\n V....D apng                 APNG image\n V....D libwebp_anim         libwebp WebP image (codec webp)\n A....D aac                  AAC\n";
@@ -279,7 +319,7 @@ pub enum Backend {
     Vaapi,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AudioSource {
     pub path: PathBuf,
     /// Trim start in seconds.
@@ -287,6 +327,9 @@ pub struct AudioSource {
     /// Trim end in seconds; `None` = until the file ends. The trimmed part is
     /// looped to cover the full output length.
     pub end: Option<f64>,
+    /// Seconds over which the end of the trimmed part blends into the sound just before its
+    /// start, so the loop runs on without a click (0 = a hard cut). Needs `end`.
+    pub fade: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -379,11 +422,25 @@ pub fn vaapi_available() -> bool {
 const COLOR_SCALE: &str = "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int";
 
 fn audio_chain(a: &AudioSource) -> String {
-    let mut trim = format!("atrim=start={}", secs_arg(a.start));
-    if let Some(e) = a.end {
-        trim.push_str(&format!(":end={}", secs_arg(e)));
+    let trim = |start: f64, end: Option<f64>| {
+        let mut t = format!("atrim=start={}", secs_arg(start));
+        if let Some(e) = end {
+            t.push_str(&format!(":end={}", secs_arg(e)));
+        }
+        t
+    };
+    // the fade needs sound before the start and fits into half the part
+    let fade = a.end.map_or(0.0, |e| a.fade.min(a.start).min((e - a.start) / 2.0));
+    if fade < 0.001 {
+        return format!("{},aloop=-1:2e+09,asetpts=N/SR/TB", trim(a.start, a.end));
     }
-    format!("{trim},aloop=-1:2e+09,asetpts=N/SR/TB")
+    // the part, its last `fade` seconds cross-faded (equal power) into the sound before it
+    format!(
+        "asplit[lp][pre];[lp]{},asetpts=N/SR/TB[part];[pre]{},asetpts=N/SR/TB[lead];[part][lead]acrossfade=d={}:c1=qsin:c2=qsin,aloop=-1:2e+09,asetpts=N/SR/TB",
+        trim(a.start, a.end),
+        trim(a.start - fade, Some(a.start)),
+        secs_arg(fade)
+    )
 }
 
 fn build_args(s: &EncodeSettings, with_audio: bool) -> Vec<String> {
